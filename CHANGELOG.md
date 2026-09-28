@@ -10,6 +10,13 @@ ascendante** : la casse se signale ici et par un bump majeur, jamais en gardant 
 morts. Seule contrainte non négociable — les **données historiques restent lisibles** : un Run
 archivé s'ouvre et se chiffre quelle que soit la version qui a écrit son payload.
 
+## 1.110.2
+**Canvas : une edge naît uniquement d'un drag, bord de node à 4,5 px** (#936, spec #935, story #934).
+
+- Dans l'éditeur de pipeline, cliquer un bord de node puis un autre node ne crée plus d'edge :
+  seul le glisser d'un bord vers un node en crée une.
+- La zone sensible du bord de node passe de 9 px à 4,5 px.
+
 ## 1.110.0
 **Onboarding : tour *Overview*** (#911, spec #910, story #909, ADR-0071 §4).
 
