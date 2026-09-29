@@ -147,6 +147,10 @@ interface EditState {
   // the first tracked mutation; `canUndo`/`canRedo` are derived by components
   // with a selector, never stored.
   history: Record<string, TabHistory>;
+  // The last tab REKEY (#774): a rename moved the tab `from` → `to`. The same
+  // tab under a new id, not a tab switch — the right-pane router reads it so a
+  // Save that renames the pipeline keeps Pipeline info open (#948).
+  lastRekey: { from: string; to: string } | null;
 
   // Single-tab mode (#342): at most one pipeline/run tab. A per-client UI pref
   // (localStorage, NOT instance_config) seeded once at store creation. When on,
@@ -369,7 +373,7 @@ function rekeyTab(
     history[newId] = history[oldId];
     delete history[oldId];
   }
-  return { openTabs, activeTabId, lastSavedAt, history };
+  return { openTabs, activeTabId, lastSavedAt, history, lastRekey: { from: oldId, to: newId } };
 }
 
 // Single-tab replace (#342): `tab` becomes the sole open tab, every `victims`
@@ -480,6 +484,7 @@ export const useEditStore = create<EditState>((set, get) => ({
   scrollToPort: null,
   lastSavedAt: {},
   history: {},
+  lastRekey: null,
   singleTabMode: loadTabsDisabled(),
   pendingSingleTab: null,
 

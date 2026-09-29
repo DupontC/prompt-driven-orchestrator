@@ -1,3 +1,4 @@
+import { useState } from "react";
 import { useEditStore } from "../stores/editStore";
 import { useWiringStore } from "../stores/wiringStore";
 import { gridStep, resolveGridSize, isGridSize } from "../lib/wiringGrid";
@@ -48,12 +49,17 @@ export default function PipelineMetaSections({
     });
   }
 
+  // A rename rebuilds the map in its current order, the renamed entry in place:
+  // the row keeps its position (and, keyed by index, its DOM input and focus)
+  // while the user types the new name.
   function handleUpdateVariable(oldName: string, newName: string, updates: Partial<VariableDef>) {
-    const newVars = { ...pipeline.variables };
-    if (oldName !== newName) {
-      delete newVars[oldName];
+    const current = pipeline.variables[oldName] ?? { type: "int", default: 0 };
+    const newVars: Record<string, VariableDef> = {};
+    for (const [k, v] of Object.entries(pipeline.variables)) {
+      if (k === oldName) newVars[newName] = { ...current, ...updates };
+      else newVars[k] = v;
     }
-    newVars[newName] = { ...(pipeline.variables[oldName] ?? { type: "int", default: 0 }), ...updates };
+    if (!(oldName in pipeline.variables)) newVars[newName] = { ...current, ...updates };
     updateMeta({ variables: newVars });
   }
 
@@ -129,7 +135,7 @@ export default function PipelineMetaSections({
             No variables.
           </div>
         )}
-        {variables.map(([name, def]) =>
+        {variables.map(([name, def], index) =>
           readOnly ? (
             <div
               key={name}
@@ -145,8 +151,9 @@ export default function PipelineMetaSections({
             </div>
           ) : (
             <VariableRow
-              key={name}
+              key={index}
               name={name}
+              isTaken={(candidate) => candidate !== name && candidate in pipeline.variables}
               def={def}
               onUpdate={(newName, updates) => handleUpdateVariable(name, newName, updates)}
               onDelete={() => handleDeleteVariable(name)}
@@ -215,15 +222,35 @@ function formatVariableValue(value: unknown): string {
 
 function VariableRow({
   name,
+  isTaken,
   def,
   onUpdate,
   onDelete,
 }: {
   name: string;
+  /** Whether another variable of the pipeline already has this name. */
+  isTaken: (candidate: string) => boolean;
   def: VariableDef;
   onUpdate: (newName: string, updates: Partial<VariableDef>) => void;
   onDelete: () => void;
 }) {
+  // The name being typed. It is committed on every keystroke while it is a valid
+  // name; an empty or already-taken name stays local (flagged) so it never
+  // overwrites another variable, and reverts on blur. Re-synced when the stored
+  // name changes from elsewhere (undo, a deleted row above shifting this one).
+  const [draftName, setDraftName] = useState(name);
+  const [syncedName, setSyncedName] = useState(name);
+  if (syncedName !== name) {
+    setSyncedName(name);
+    setDraftName(name);
+  }
+  const nameInvalid = draftName !== name;
+
+  function handleNameChange(val: string) {
+    setDraftName(val);
+    if (val.trim() !== "" && !isTaken(val)) onUpdate(val, {});
+  }
+
   const defaultStr = Array.isArray(def.default)
     ? `[${(def.default as unknown[]).join(", ")}]`
     : String(def.default ?? "");
@@ -249,11 +276,14 @@ function VariableRow({
       data-testid="pipeline-variable-row"
     >
       <input
-        value={name}
-        onChange={(e) => onUpdate(e.target.value, {})}
-        className="w-20 min-w-0 bg-transparent text-fg outline-none"
+        value={draftName}
+        onChange={(e) => handleNameChange(e.target.value)}
+        onBlur={() => setDraftName(name)}
+        className={`w-20 min-w-0 bg-transparent outline-none ${nameInvalid ? "text-st-failed" : "text-fg"}`}
         style={{ fontSize: "11px" }}
         aria-label="Variable name"
+        aria-invalid={nameInvalid}
+        title={nameInvalid ? (draftName.trim() === "" ? "A variable needs a name" : "Another variable already has this name") : undefined}
         data-testid="pipeline-variable-name"
       />
       <select

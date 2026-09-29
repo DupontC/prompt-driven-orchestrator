@@ -17,6 +17,8 @@ export interface RightPaneRouterArgs {
   selection: Selection;
   /** The active edit-tab id (`editStore.activeTabId`). */
   editActiveTabId: string | null;
+  /** The store's last tab rekey (`editStore.lastRekey`, #774) — not a tab switch. */
+  tabRekey?: { from: string; to: string } | null;
   /** Whether an edit tab owns the centre canvas. */
   hasEditTab: boolean;
   /** The currently-selected Trigger id (App-owned state). */
@@ -73,6 +75,7 @@ export function useRightPaneRouter(
   const {
     selection,
     editActiveTabId,
+    tabRekey,
     hasEditTab,
     selectedTriggerId,
     setSelectedTriggerId,
@@ -143,6 +146,7 @@ export function useRightPaneRouter(
       prevTabId: lastInfoTabId,
       nextTabId: editActiveTabId,
       infoOpen: infoPanelOpen,
+      rekey: tabRekey,
     });
     setLastInfoTabId(editActiveTabId); // UNCONDITIONAL — mirrors the #320 block
     if (closeInfo) setInfoPanelOpen(false);

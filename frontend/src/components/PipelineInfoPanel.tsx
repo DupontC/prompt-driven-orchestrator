@@ -790,7 +790,7 @@ function InfoTab({
           >
             {run.status === "archived"
               ? "Archived run · read-only · outputs preserved"
-              : "Editing run-scoped pipeline · changes sync to template"}
+              : "Canvas edits sync to template · run settings are read-only"}
           </div>
         )}
       </div>

@@ -277,6 +277,14 @@ test("template metadata is edited through Pipeline info, shown in YAML and saved
   await promptRequired.uncheck();
   await page.getByTestId("pipeline-variable-add").click();
   await expect(page.getByTestId("pipeline-variable-row")).toHaveCount(2);
+  // Name it by typing, key by key: the row keeps its input (and focus) and its
+  // place in the list while the name changes under it.
+  const newVarName = page.getByTestId("pipeline-variable-row").nth(1).getByTestId("pipeline-variable-name");
+  await newVarName.click();
+  await newVarName.press("ControlOrMeta+a");
+  await newVarName.pressSequentially("target_env");
+  await expect(newVarName).toHaveValue("target_env");
+  await expect(newVarName).toBeFocused();
   await page.getByTestId("pipeline-grid-size-S").click();
 
   // Every edit marks the tab dirty…
@@ -287,7 +295,7 @@ test("template metadata is edited through Pipeline info, shown in YAML and saved
   const yamlView = page.getByTestId("info-yaml-content");
   await expect(yamlView).toContainText("prompt_required: false", { timeout: 3_000 });
   await expect(yamlView).toContainText("grid_size: S");
-  await expect(yamlView).toContainText("new_var");
+  await expect(yamlView).toContainText("target_env");
   await expect(yamlView).toContainText("2.5");
 
   // Save writes it to the pipeline file.
@@ -298,7 +306,7 @@ test("template metadata is edited through Pipeline info, shown in YAML and saved
     .toContain("prompt_required: false");
   const saved = await fs.readFile(PIPELINE_PATH, "utf8");
   expect(saved).toContain("grid_size: S");
-  expect(saved).toContain("new_var");
+  expect(saved).toContain("target_env");
   expect(saved).toMatch(/version: ["']?2\.5/);
 
   // Restore the seed so the other cases keep a prompt-required pipeline.

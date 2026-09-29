@@ -195,6 +195,53 @@ describe("Pipeline info — Info tab on a template (#948)", () => {
     expect(tabNow().dirty).toBe(true);
   });
 
+  // FP #948 finding: typing a name keystroke by keystroke used to remount the
+  // row on every change (keyed by name) — the input lost focus after one letter
+  // and the row jumped to the end of the list.
+  it("renames a variable keystroke by keystroke, keeping focus and its position", () => {
+    patchPipeline({
+      variables: {
+        a: { type: "int", default: 1 },
+        new_var: { type: "int", default: 0 },
+        z: { type: "int", default: 2 },
+      },
+    });
+    render(<StorePanel />);
+    const nameInput = () =>
+      within(screen.getAllByTestId("pipeline-variable-row")[1]).getByTestId("pipeline-variable-name") as HTMLInputElement;
+    const input = nameInput();
+    input.focus();
+    for (const typed of ["e", "en", "env"]) fireEvent.change(nameInput(), { target: { value: typed } });
+    expect(nameInput()).toBe(input);
+    expect(document.activeElement).toBe(input);
+    expect(Object.keys(pipelineNow().variables)).toEqual(["a", "env", "z"]);
+    expect(pipelineNow().variables.env).toEqual({ type: "int", default: 0 });
+  });
+
+  it("never commits an empty or already-taken name, and reverts it on blur", () => {
+    patchPipeline({
+      variables: {
+        a: { type: "int", default: 1 },
+        b: { type: "string", default: "x" },
+      },
+    });
+    render(<StorePanel />);
+    const nameInput = () =>
+      within(screen.getAllByTestId("pipeline-variable-row")[1]).getByTestId("pipeline-variable-name") as HTMLInputElement;
+
+    fireEvent.change(nameInput(), { target: { value: "a" } });
+    expect(nameInput().value).toBe("a");
+    expect(nameInput()).toHaveAttribute("aria-invalid", "true");
+    expect(pipelineNow().variables).toEqual({ a: { type: "int", default: 1 }, b: { type: "string", default: "x" } });
+
+    fireEvent.change(nameInput(), { target: { value: "" } });
+    expect(Object.keys(pipelineNow().variables)).toEqual(["a", "b"]);
+
+    fireEvent.blur(nameInput());
+    expect(nameInput().value).toBe("b");
+    expect(nameInput()).toHaveAttribute("aria-invalid", "false");
+  });
+
   it("does not render the lint banner — pipeline diagnostics live on the canvas overlay (#63)", () => {
     useEditStore.setState((s) => ({
       openTabs: s.openTabs.map((t) => ({

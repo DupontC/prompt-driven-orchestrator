@@ -341,6 +341,7 @@ export default function App() {
   const editUndo = useEditStore((s) => s.undo);
   const editRedo = useEditStore((s) => s.redo);
   const editActiveTabId = useEditStore((s) => s.activeTabId);
+  const editLastRekey = useEditStore((s) => s.lastRekey);
   const resolveConflict = useEditStore((s) => s.resolveConflict);
   const clearSaveError = useEditStore((s) => s.clearSaveError);
   // #342: a single-tab open/replace parked because it would discard unsaved
@@ -422,6 +423,7 @@ export default function App() {
     useRightPaneRouter({
       selection,
       editActiveTabId,
+      tabRekey: editLastRekey,
       hasEditTab,
       selectedTriggerId,
       setSelectedTriggerId,
