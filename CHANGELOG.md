@@ -25,6 +25,11 @@ archivé s'ouvre et se chiffre quelle que soit la version qui a écrit son paylo
   `merge-resolver`, refus `merge_resolution_failed` / `merge_resolver_*`, lint « fan-out sans
   Merge », conseil Merge de l'importeur). Les événements `MergeResolver*` des anciens Runs restent
   lisibles : ces Runs se rouvrent, se chiffrent et gardent leur ligne Infrastructure dans Stats.
+- Un conflit de merge-back met le nœud en Interrupted ; sa bannière dit désormais « Merge-back
+  conflict » au lieu de « Session died ».
+- Canvas : une arête auto qui sort à droite vers une cible située en arrière (typiquement la
+  sortie sans `side` d'un ancien Merge, au-dessus de son End) ne traverse plus sa carte source.
+  Elle part par une patte du côté de sortie et contourne la carte.
 
 ## 1.110.0
 **Onboarding : tour *Overview*** (#911, spec #910, story #909, ADR-0071 §4).
