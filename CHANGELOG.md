@@ -10,6 +10,13 @@ ascendante** : la casse se signale ici et par un bump majeur, jamais en gardant 
 morts. Seule contrainte non négociable — les **données historiques restent lisibles** : un Run
 archivé s'ouvre et se chiffre quelle que soit la version qui a écrit son payload.
 
+## 1.110.3
+**Toolbar : boutons Assistant et Info mutuellement exclusifs** (#938, spec #937, story PDO-3).
+
+- Le glyphe « agent » et le bouton Pipeline info reflètent l'onglet affiché du panneau droit :
+  Assistant allume « agent », Info/YAML (et les onglets du Run) allument `i`, jamais les deux.
+- Cliquer le bouton de l'onglet affiché ferme le panneau ; cliquer l'autre bascule d'onglet.
+
 ## 1.110.0
 **Onboarding : tour *Overview*** (#911, spec #910, story #909, ADR-0071 §4).
 
