@@ -44,4 +44,41 @@ describe("reframeOnPaneResize (#949)", () => {
     const v = reframeOnPaneResize({ x: 0, y: 0, zoom: 0.5 }, 1400, 800, 600, card);
     expect(v).toEqual({ x: 400 - 1550, y: 300 - 25, zoom: 0.5 });
   });
+
+  it("stops the leftward pan where the graph meets the canvas's left edge", () => {
+    // Graph panned left by the user: its left edge sits 100px into the canvas.
+    // A 300px pan would push 200px of it out; the pan stops at 100px.
+    const graph = { x: 0, y: 0, width: 500, height: 100 };
+    expect(reframeOnPaneResize({ x: 100, y: 0, zoom: 1 }, 1400, 800, 600, null, graph)).toEqual({
+      x: 0,
+      y: 0,
+      zoom: 1,
+    });
+  });
+
+  it("does not pan left at all when the graph's left edge is already cut off", () => {
+    const graph = { x: 0, y: 0, width: 500, height: 100 };
+    expect(reframeOnPaneResize({ x: -50, y: 0, zoom: 1 }, 1400, 800, 600, null, graph)).toEqual({
+      x: -50,
+      y: 0,
+      zoom: 1,
+    });
+  });
+
+  it("keeps the full half-width pan for a centred graph", () => {
+    // Graph spans 450..950 on a 1400px canvas: a 300px pan keeps it in frame.
+    const graph = { x: 0, y: 0, width: 500, height: 100 };
+    expect(reframeOnPaneResize({ x: 450, y: 0, zoom: 1 }, 1400, 800, 600, null, graph).x).toBe(150);
+  });
+
+  it("measures the graph's left edge at the current zoom", () => {
+    // Left edge on screen: 400 * 0.5 - 100 = 100px, so the pan stops at 100px.
+    const graph = { x: 400, y: 0, width: 1000, height: 100 };
+    expect(reframeOnPaneResize({ x: -100, y: 0, zoom: 0.5 }, 1400, 800, 600, null, graph).x).toBe(-200);
+  });
+
+  it("does not bound the pan when the pane folds back", () => {
+    const graph = { x: 0, y: 0, width: 500, height: 100 };
+    expect(reframeOnPaneResize({ x: 0, y: 0, zoom: 1 }, 800, 1400, 600, null, graph).x).toBe(300);
+  });
 });

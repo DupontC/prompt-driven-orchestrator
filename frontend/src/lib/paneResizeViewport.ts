@@ -10,6 +10,11 @@
  * The answer, pure so it can be tested without a DOM: pan by half the width
  * change, so the graph keeps its visual centre, then — if a card is selected and
  * still not fully in frame — centre on it. Zoom never changes.
+ *
+ * The half-width pan assumes a centred graph. One the user panned to the left
+ * would be pushed out past the canvas's left edge (FP iteration 2), so the pan
+ * towards the left stops where the graph's left edge meets the canvas's — and
+ * does not happen at all if that edge is already cut off.
  */
 
 export interface Viewport {
@@ -32,9 +37,15 @@ export function reframeOnPaneResize(
   width: number,
   height: number,
   selected: FlowRect | null,
+  graph: FlowRect | null = null,
 ): Viewport {
   const { zoom } = viewport;
-  const next = { x: viewport.x + (width - prevWidth) / 2, y: viewport.y, zoom };
+  let shift = (width - prevWidth) / 2;
+  if (shift < 0 && graph) {
+    const graphLeft = graph.x * zoom + viewport.x;
+    shift = Math.max(shift, Math.min(0, -graphLeft));
+  }
+  const next = { x: viewport.x + shift, y: viewport.y, zoom };
   if (!selected) return next;
   const left = selected.x * zoom + next.x;
   const top = selected.y * zoom + next.y;

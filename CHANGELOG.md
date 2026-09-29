@@ -22,8 +22,10 @@ archivé s'ouvre et se chiffre quelle que soit la version qui a écrit son paylo
   panneau sous sa taille minimale en le glissant.
 - Un Run à sélection vide garde son panneau Run ; un Run archivé garde « Run archived ».
 - Le canvas se recadre au dépliage comme au repli : il garde son centre visuel, et le nœud
-  sélectionné reste entièrement visible au lieu de glisser sous le panneau. Un glissement de
-  la poignée ou un redimensionnement de la fenêtre ne recadre pas.
+  sélectionné reste entièrement visible au lieu de glisser sous le panneau. Au dépliage, le
+  décalage s'arrête là où le bord gauche du graphe rejoint celui du canvas : un graphe déplacé
+  vers la gauche ne passe pas sous la barre latérale. Un glissement de la poignée ou un
+  redimensionnement de la fenêtre ne recadre pas.
 
 ## 1.111.0
 **Pipeline info, seule surface des métadonnées d'un pipeline** (#948, spec #947, story Notion #6).

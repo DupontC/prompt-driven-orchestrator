@@ -15,7 +15,8 @@ import { cleanupRuns, openPipelineForEdit, runMultipart } from "./helpers";
 // 4. Opening Pipeline info with nothing selected expands it; closing collapses.
 // 5. A Run tab with an empty selection keeps its Run panel on the right.
 // 6. Unfolding re-frames the canvas: the clicked card is never left under the
-//    pane (FP iteration 1).
+//    pane (FP iteration 1), and a graph the user panned to the left is not
+//    pushed out past the canvas's left edge (FP iteration 2).
 
 const PIPELINE_NAME = `e2e-right-pane-${process.pid}-${Date.now()}`;
 const PIPELINE_DIR = path.join(os.homedir(), ".pdo", "pipelines");
@@ -212,6 +213,42 @@ test("Pipeline info expands the pane; closing it with nothing selected collapses
   await page.getByTestId("toolbar-info").click();
   await expect(infoPanel).not.toBeVisible();
   await expectCollapsed(page);
+});
+
+test("unfolding does not push a graph panned to the left out of the canvas", async ({ page }) => {
+  await gotoConnected(page);
+  await openPipelineForEdit(page, PIPELINE_NAME);
+  await expect(page.getByTestId("tab-list")).toBeVisible({ timeout: 10_000 });
+  await clickEmptyCanvas(page);
+  await expectCollapsed(page);
+
+  // Pan the fit-viewed graph 300px to the left: every card stays visible, but
+  // the graph now sits in the left half of the canvas.
+  const pane = page.locator(".react-flow__pane");
+  const box = await pane.boundingBox();
+  expect(box).toBeTruthy();
+  const y = box!.y + box!.height - 60;
+  await page.mouse.move(box!.x + box!.width - 60, y);
+  await page.mouse.down();
+  await page.mouse.move(box!.x + box!.width - 360, y, { steps: 10 });
+  await page.mouse.up();
+  await expectCardInFrame(page, "start");
+  await expectCardInFrame(page, "end");
+
+  // Unfolding shifts the view by at most what keeps Start inside the canvas.
+  await page.getByTestId("toolbar-info").click();
+  await expect(page.getByTestId("pipeline-info-panel")).toBeVisible({ timeout: 3_000 });
+  await expect.poll(() => rightWidth(page)).toBeGreaterThan(100);
+  await expectCardInFrame(page, "start");
+  await expectCardInFrame(page, "end");
+
+  // Same when End is the card that unfolds the pane.
+  await page.getByTestId("info-panel-close").click();
+  await expectCollapsed(page);
+  await page.locator('.react-flow__node[data-id="end"]').click();
+  await expect.poll(() => rightWidth(page)).toBeGreaterThan(100);
+  await expectCardInFrame(page, "start");
+  await expectCardInFrame(page, "end");
 });
 
 test("a Run tab with an empty selection keeps its Run panel", async ({

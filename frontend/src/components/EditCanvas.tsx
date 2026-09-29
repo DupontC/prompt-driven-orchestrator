@@ -592,7 +592,9 @@ function EditCanvasInner({ libraryEntries, onLibraryDelete, infoOpen, onToggleIn
             height: node.measured.height ?? CARD_HEIGHT,
           }
         : null;
-      reactFlow.setViewport(reframeOnPaneResize(reactFlow.getViewport(), prevWidth, width, height, selected));
+      const nodes = reactFlow.getNodes();
+      const graph = nodes.length > 0 ? reactFlow.getNodesBounds(nodes) : null;
+      reactFlow.setViewport(reframeOnPaneResize(reactFlow.getViewport(), prevWidth, width, height, selected, graph));
     });
     observer.observe(wrapper);
     return () => observer.disconnect();
