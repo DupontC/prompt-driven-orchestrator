@@ -166,22 +166,28 @@ export default function ProjectEditModal({
       onClick={onClose}
     >
       <div
-        className="w-[440px] max-w-[90vw] rounded-lg border border-line bg-bg-4 p-4"
+        className="flex max-h-[85vh] w-[440px] max-w-[90vw] flex-col rounded-lg border border-line bg-bg-4"
         style={{ fontSize: "12px" }}
         role="dialog"
         aria-label="Edit project"
         data-testid="project-edit-modal"
         onClick={(e) => e.stopPropagation()}
       >
-        <div className="mb-1 font-medium text-fg">
-          {initialProject ? "Edit project" : "Name project"}
+        {/* #940: bounded to the window like New Run — the header and the actions
+            never shrink, only the body scrolls when the content overflows; the
+            borders mark where the scrolling body is cut off. */}
+        <div className="shrink-0 border-b border-line px-4 pb-3 pt-4">
+          <div className="mb-1 font-medium text-fg">
+            {initialProject ? "Edit project" : "Name project"}
+          </div>
+          <p className="text-fg-4" style={{ fontSize: "11px" }}>
+            Group repositories that work together under one name. A repo belongs to
+            at most one project; the harness set here applies to every Run whose
+            primary repo is a member.
+          </p>
         </div>
-        <p className="mb-3 text-fg-4" style={{ fontSize: "11px" }}>
-          Group repositories that work together under one name. A repo belongs to
-          at most one project; the harness set here applies to every Run whose
-          primary repo is a member.
-        </p>
 
+        <div className="min-h-0 overflow-y-auto px-4 pt-3" data-testid="project-edit-body">
         <label className="mb-1 block text-fg-3" style={{ fontSize: "11px" }}>
           Name
         </label>
@@ -286,7 +292,9 @@ export default function ProjectEditModal({
             );
           })}
         </div>
+        </div>
 
+        <div className="shrink-0 border-t border-line px-4 py-3">
         {error && (
           <div
             className="mb-3 rounded border border-st-failed/40 bg-st-failed/10 px-2 py-1.5 text-st-failed"
@@ -315,6 +323,7 @@ export default function ProjectEditModal({
           >
             {submitting ? "Saving…" : "Save"}
           </button>
+        </div>
         </div>
       </div>
     </div>

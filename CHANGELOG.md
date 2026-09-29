@@ -10,6 +10,13 @@ ascendante** : la casse se signale ici et par un bump majeur, jamais en gardant 
 morts. Seule contrainte non négociable — les **données historiques restent lisibles** : un Run
 archivé s'ouvre et se chiffre quelle que soit la version qui a écrit son payload.
 
+## 1.112.1
+**Modales bornées à la hauteur de la fenêtre** (#940, spec #939, story Notion PDO-8).
+
+- Edit project / Name project, profil agentique, destruction de loops et fermeture d'onglets
+  non sauvegardés tiennent dans 85 % de la fenêtre : titre et actions restent visibles, seul le
+  corps défile (modèle : New Run).
+
 ## 1.112.0
 **Le panneau de droite se replie quand il n'a rien à montrer** (#949, spec #947, story Notion #6).
 
