@@ -1150,7 +1150,7 @@ export default function SettingsSurface({
                 </Section>
                 <Section section={item.sections[2]}>
                   {/* The instance-scope editor IS the section; its own Save provisioning stays. */}
-                  <PersistedProvisioningEditor scope="instance" />
+                  <PersistedProvisioningEditor scope="instance" defaultExpanded />
                 </Section>
                 </>
               ) : (

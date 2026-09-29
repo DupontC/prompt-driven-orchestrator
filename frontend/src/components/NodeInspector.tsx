@@ -83,7 +83,6 @@ export default function NodeInspector({
   const asideRef = useRef<HTMLElement>(null);
   const [highlightedPort, setHighlightedPort] = useState<string | null>(null);
   const [provisioningPreviewRepository, setProvisioningPreviewRepository] = useState("");
-  const [provisioningOpenFor, setProvisioningOpenFor] = useState<string | null>(null);
   // Pending destroy-loop confirmation (#339, mirrors EditCanvas #150): set when
   // deleting an input source would remove a bounded region's last cycle.
   const [pendingDestroy, setPendingDestroy] = useState<{
@@ -130,7 +129,6 @@ export default function NodeInspector({
   );
 
   if (!tab || !node) return null;
-  const provisioningOpen = provisioningOpenFor === node.id;
   const resolvedHarness = resolveEditorHarness(node);
   const harnessOption = findHarnessOption(harnessCatalog, resolvedHarness);
   // #798: the effort picker's offer is read against the node's SELECTED model —
@@ -358,46 +356,36 @@ export default function NodeInspector({
               </span>
             )}
             {isolation && (
-              <>
-                <button
-                  type="button"
-                  aria-expanded={provisioningOpen}
-                  onClick={() => setProvisioningOpenFor(provisioningOpen ? null : node.id)}
-                  className="cursor-pointer rounded border border-line-strong bg-bg-3 px-2 py-1.5 text-left font-medium text-fg-2 hover:border-fg-4"
-                >
-                  {provisioningOpen ? "Hide provisioning" : "Configure provisioning"}
-                </button>
-                {provisioningOpen && (
-                  <>
-                    {!provisioningRepository && (
-                      <label className="block text-fg-3" style={{ fontSize: 10 }}>
-                        Resolve against
-                        <input
-                          value={provisioningPreviewRepository}
-                          onChange={(event) => setProvisioningPreviewRepository(event.target.value)}
-                          placeholder="/absolute/path/to/repository"
-                          className="mt-1 w-full rounded border border-line-strong bg-bg-3 px-2 py-1 font-mono text-fg outline-none focus:border-acc"
-                        />
-                      </label>
-                    )}
-                    <ProvisioningRulesEditor
-                      level="isolated_node"
-                      repository={provisioningRepository || provisioningPreviewRepository}
-                      rules={
-                        (provisioningFrozenAt ? runNode?.provisioning : undefined) ??
-                        node.provisioning ??
-                        EMPTY_PROVISIONING_RULES
-                      }
-                      onChange={(rules) => handleField("provisioning", rules)}
-                      readOnly={readOnly || !!provisioningFrozenAt}
-                      frozenAt={provisioningFrozenAt}
-                      frozenPlan={provisioningFrozenAt ? runNode?.provisioning_plan : undefined}
-                      inherited={inheritedProvisioning}
-                      gitRef={provisioningGitRef}
-                    />
-                  </>
-                )}
-              </>
+              <ProvisioningRulesEditor
+                // Notion #7: a fresh, collapsed block for every node selected.
+                key={node.id}
+                level="isolated_node"
+                repository={provisioningRepository || provisioningPreviewRepository}
+                rules={
+                  (provisioningFrozenAt ? runNode?.provisioning : undefined) ??
+                  node.provisioning ??
+                  EMPTY_PROVISIONING_RULES
+                }
+                onChange={(rules) => handleField("provisioning", rules)}
+                readOnly={readOnly || !!provisioningFrozenAt}
+                frozenAt={provisioningFrozenAt}
+                frozenPlan={provisioningFrozenAt ? runNode?.provisioning_plan : undefined}
+                inherited={inheritedProvisioning}
+                gitRef={provisioningGitRef}
+                leading={
+                  !provisioningRepository && (
+                    <label className="block text-fg-3" style={{ fontSize: 10 }}>
+                      Resolve against
+                      <input
+                        value={provisioningPreviewRepository}
+                        onChange={(event) => setProvisioningPreviewRepository(event.target.value)}
+                        placeholder="/absolute/path/to/repository"
+                        className="mt-1 w-full rounded border border-line-strong bg-bg-3 px-2 py-1 font-mono text-fg outline-none focus:border-acc"
+                      />
+                    </label>
+                  )
+                }
+              />
             )}
           </>
         )}
