@@ -35,7 +35,6 @@ import { infoPanelButtons, toggleAssistantTab, toggleInfoTab } from "./lib/infoP
 import EditCanvas from "./components/EditCanvas";
 import TabBar from "./components/TabBar";
 import NodeInspector from "./components/NodeInspector";
-import MergeInspector from "./components/MergeInspector";
 import PipelineInfoPanel from "./components/PipelineInfoPanel";
 import StartInspector from "./components/StartInspector";
 import EndInspector from "./components/EndInspector";
@@ -563,7 +562,6 @@ export default function App() {
 
   function inspectorEditPane() {
     switch (editNodeType) {
-      case "merge": return <MergeInspector />;
       // #248: `script` reuses NodeInspector, which shows the Script (bash) editor
       // and hides the model field for it.
       // Without this case a script node would fall through and — before the

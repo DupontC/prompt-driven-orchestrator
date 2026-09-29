@@ -4,7 +4,6 @@ use std::path::Path;
 use tracing::{info, warn};
 
 use crate::pipeline;
-use crate::pipeline::{Diagnostic, NodeType, PipelineDef, Severity};
 
 const NANOID_ALPHABET: &[u8] = b"0123456789ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz";
 const NANOID_LEN: usize = 8;
@@ -89,12 +88,12 @@ fn needs_migration(yaml_value: &serde_yaml::Value) -> bool {
     for node in nodes {
         // A flat `model:` / `effort:` on ANY node migrates under
         // `harnesses.claude.*`. Checked before the structural-node `continue` below,
-        // or a `merge` node's flat fields would be skipped.
+        // or a structural node's flat fields would be skipped.
         if node.get("model").is_some() || node.get("effort").is_some() {
             return true;
         }
         let node_type = node.get("type").and_then(|v| v.as_str()).unwrap_or("");
-        if matches!(node_type, "start" | "end" | "switch" | "loop" | "merge") {
+        if matches!(node_type, "start" | "end" | "switch" | "loop") {
             continue;
         }
         if node.get("prompt_file").and_then(|v| v.as_str()).is_some() {
@@ -108,7 +107,7 @@ fn needs_migration(yaml_value: &serde_yaml::Value) -> bool {
         // Inputs are emergent (#149): a *regular* node (agent / script)
         // that still declares any input needs migration so the declared port is
         // dropped (and a `repeated` flag migrated onto its edge). Structural
-        // nodes (for-each here; start/end/switch/loop/merge already `continue`d
+        // nodes (for-each here; start/end/switch/loop already `continue`d
         // above) keep their required ports.
         if node_type != "for-each"
             && node
@@ -259,7 +258,7 @@ pub(crate) fn migrate_pipeline_yaml(
             .get(serde_yaml::Value::String("type".into()))
             .and_then(|v| v.as_str())
             .unwrap_or("");
-        if matches!(node_type, "start" | "end" | "switch" | "loop" | "merge") {
+        if matches!(node_type, "start" | "end" | "switch" | "loop") {
             continue;
         }
 
@@ -370,7 +369,7 @@ pub(crate) fn migrate_pipeline_yaml(
 /// - `FE.done -> D.r` becomes the **barrier** edge `T.o -> D.r`, where `T` is the
 ///   body terminal (the member with no outgoing edge to another member) and `o`
 ///   its first output port. The region's outgoing edges fire once when all items
-///   finish, preserving `done -> Merge` convergence (ADR-0006).
+///   finish, so the downstream node converges on every lap (ADR-0079).
 /// - the ForEach node is removed and a `{ id, kind: collection, over, members }`
 ///   entry is appended to the pipeline's `loops:` block (no `max_iter`).
 fn dissolve_foreaches(doc: &mut serde_yaml::Value) -> Result<(), String> {
@@ -653,7 +652,7 @@ fn body_terminal(
 }
 
 /// #149: inputs are emergent. Strip declared `inputs` from regular (non-isolated /
-/// isolated) nodes. Structural nodes (start/end/merge/loop/for-each) keep
+/// isolated) nodes. Structural nodes (start/end/switch/loop/for-each) keep
 /// their required ports. Any `repeated: true` declared input is migrated onto
 /// the matching incoming edge so loop accumulation is preserved.
 fn drop_declared_inputs(doc: &mut serde_yaml::Value) {
@@ -665,10 +664,7 @@ fn drop_declared_inputs(doc: &mut serde_yaml::Value) {
     if let Some(nodes) = doc.get("nodes").and_then(|n| n.as_sequence()) {
         for node in nodes {
             let node_type = node.get("type").and_then(|v| v.as_str()).unwrap_or("");
-            if matches!(
-                node_type,
-                "start" | "end" | "switch" | "merge" | "loop" | "for-each"
-            ) {
+            if matches!(node_type, "start" | "end" | "switch" | "loop" | "for-each") {
                 continue;
             }
             let Some(node_id) = node.get("id").and_then(|v| v.as_str()) else {
@@ -1572,63 +1568,10 @@ pub(crate) fn migrate_stranded_flat_prompts(pipelines_dir: &Path) -> Result<usiz
     Ok(moved)
 }
 
-/// Detects fan-outs where 2+ **isolated** nodes (#653) share a common downstream
-/// target but no Merge node sits between them and the target.
-///
-/// Isolation, not the node's type, is what makes a fan-out risky: two nodes that
-/// each fork a sub-worktree produce two branches nothing reconciles, while two
-/// nodes sharing the Run worktree already write to one tree.
-///
-/// Returns info-only diagnostics (ADR-0001: non-blocking).
-#[allow(dead_code)]
-pub(crate) fn lint_missing_merge(pipeline: &PipelineDef) -> Vec<Diagnostic> {
-    let mut diagnostics = Vec::new();
-
-    let isolated_ids: HashSet<&str> = pipeline
-        .nodes
-        .iter()
-        .filter(|n| n.node_type != NodeType::Merge && n.is_isolated())
-        .map(|n| n.id.as_str())
-        .collect();
-
-    let merge_ids: HashSet<&str> = pipeline
-        .nodes
-        .iter()
-        .filter(|n| n.node_type == NodeType::Merge)
-        .map(|n| n.id.as_str())
-        .collect();
-
-    let mut target_isolated_sources: HashMap<&str, Vec<&str>> = HashMap::new();
-
-    for edge in &pipeline.edges {
-        let src = edge.source.node.as_str();
-        let tgt = edge.target.node.as_str();
-        if isolated_ids.contains(src) && !merge_ids.contains(tgt) {
-            target_isolated_sources.entry(tgt).or_default().push(src);
-        }
-    }
-
-    for (target_id, sources) in &target_isolated_sources {
-        if sources.len() >= 2 {
-            diagnostics.push(Diagnostic {
-                severity: Severity::Warning,
-                message: format!(
-                    "node '{}' receives edges from {} isolated nodes ({}) without a Merge node — \
-                     parallel code changes may conflict at merge time",
-                    target_id,
-                    sources.len(),
-                    sources.join(", "),
-                ),
-            });
-        }
-    }
-
-    diagnostics
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::pipeline::{NodeType, PipelineDef};
 
     #[test]
     fn deterministic_id_is_stable() {
@@ -1743,50 +1686,6 @@ edges: []
         assert!(
             !again.migrated,
             "an already-folded pipeline must not migrate again"
-        );
-    }
-
-    #[test]
-    fn migrates_flat_model_effort_on_a_merge_node() {
-        // A `merge` node spawns an agent, so its flat model/effort migrate too: the
-        // `needs_migration` clause runs before the structural-node `continue`.
-        let yaml = r#"
-name: test
-version: "1.0"
-nodes:
-  - id: start
-    name: Start
-    type: start
-    outputs:
-      - name: user_prompt
-  - id: aBcD1234
-    name: merger
-    type: merge
-    model: sonnet
-    outputs:
-      - name: merged
-        side: right
-    view: { x: 100, y: 160 }
-  - id: end
-    name: End
-    type: end
-    inputs:
-      - name: result
-edges: []
-"#;
-        let result = migrate_pipeline_yaml(yaml, Path::new("/tmp/test.yaml")).unwrap();
-        assert!(result.migrated, "a merge node's flat model must migrate");
-        let parsed: serde_yaml::Value = serde_yaml::from_str(&result.yaml_text).unwrap();
-        let node = parsed["nodes"]
-            .as_sequence()
-            .unwrap()
-            .iter()
-            .find(|n| n["name"].as_str() == Some("merger"))
-            .unwrap();
-        assert!(node.get("model").is_none());
-        assert_eq!(
-            node["harnesses"]["claude"]["model"].as_str(),
-            Some("sonnet")
         );
     }
 
@@ -2418,244 +2317,6 @@ edges:
             !second.migrated,
             "a migrated switch pipeline must not migrate again"
         );
-    }
-
-    use crate::pipeline::{EdgeDef, EdgeEndpoint, EdgeSource, NodeDef, Port, PortSide, PortType};
-
-    fn make_isolated_node(id: &str) -> NodeDef {
-        NodeDef {
-            skills: Vec::new(),
-            isolated_worktree: Some(true),
-            id: id.into(),
-            name: id.into(),
-            node_type: NodeType::Agent,
-            inputs: vec![Port {
-                name: "in".into(),
-                repeated: false,
-                side: Some(PortSide::Left),
-                port_type: PortType::Markdown,
-                frontmatter: None,
-                when: None,
-                description: None,
-                instructions: None,
-                required: false,
-            }],
-            outputs: vec![Port {
-                name: "out".into(),
-                repeated: false,
-                side: Some(PortSide::Right),
-                port_type: PortType::Markdown,
-                frontmatter: None,
-                when: None,
-                description: None,
-                instructions: None,
-                required: false,
-            }],
-            interactive: false,
-            view: None,
-            max_iter: None,
-            over: None,
-            pin_harness: None,
-            harnesses: Default::default(),
-            agent_choice: None,
-            auto_fail: None,
-            orchestrator: false,
-        }
-    }
-
-    fn make_merge_node(id: &str) -> NodeDef {
-        NodeDef {
-            skills: Vec::new(),
-            isolated_worktree: None,
-            id: id.into(),
-            name: id.into(),
-            node_type: NodeType::Merge,
-            inputs: vec![Port {
-                name: "branches".into(),
-                repeated: true,
-                side: Some(PortSide::Left),
-                port_type: PortType::Markdown,
-                frontmatter: None,
-                when: None,
-                description: None,
-                instructions: None,
-                required: false,
-            }],
-            outputs: vec![Port {
-                name: "merged".into(),
-                repeated: false,
-                side: Some(PortSide::Right),
-                port_type: PortType::Markdown,
-                frontmatter: None,
-                when: None,
-                description: None,
-                instructions: None,
-                required: false,
-            }],
-            interactive: false,
-            view: None,
-            max_iter: None,
-            over: None,
-            pin_harness: None,
-            harnesses: Default::default(),
-            agent_choice: None,
-            auto_fail: None,
-            orchestrator: false,
-        }
-    }
-
-    fn make_shared_node(id: &str) -> NodeDef {
-        NodeDef {
-            skills: Vec::new(),
-            isolated_worktree: Some(false),
-            id: id.into(),
-            name: id.into(),
-            node_type: NodeType::Agent,
-            inputs: vec![Port {
-                name: "in".into(),
-                repeated: false,
-                side: Some(PortSide::Left),
-                port_type: PortType::Markdown,
-                frontmatter: None,
-                when: None,
-                description: None,
-                instructions: None,
-                required: false,
-            }],
-            outputs: vec![Port {
-                name: "out".into(),
-                repeated: false,
-                side: Some(PortSide::Right),
-                port_type: PortType::Markdown,
-                frontmatter: None,
-                when: None,
-                description: None,
-                instructions: None,
-                required: false,
-            }],
-            interactive: false,
-            view: None,
-            max_iter: None,
-            over: None,
-            pin_harness: None,
-            harnesses: Default::default(),
-            agent_choice: None,
-            auto_fail: None,
-            orchestrator: false,
-        }
-    }
-
-    fn make_edge(src: &str, src_port: &str, tgt: &str, tgt_port: &str) -> EdgeDef {
-        EdgeDef {
-            source: EdgeSource::single(src, src_port),
-            target: EdgeEndpoint {
-                node: tgt.into(),
-                port: tgt_port.into(),
-            },
-            reason: None,
-            when: None,
-            is_else: false,
-            repeated: false,
-            ..Default::default()
-        }
-    }
-
-    #[test]
-    fn lint_flags_fan_out_cm_without_merge() {
-        let pipeline = PipelineDef {
-            name: "fan-out-no-merge".into(),
-            version: None,
-            variables: HashMap::new(),
-            nodes: vec![
-                make_isolated_node("impl-a"),
-                make_isolated_node("impl-b"),
-                make_shared_node("reviewer"),
-            ],
-            edges: vec![
-                make_edge("impl-a", "out", "reviewer", "in"),
-                make_edge("impl-b", "out", "reviewer", "in"),
-            ],
-            loops: Vec::new(),
-            notes: Vec::new(),
-            prompt_required: true,
-            grid_size: None,
-        };
-        let diags = lint_missing_merge(&pipeline);
-        assert_eq!(diags.len(), 1);
-        assert!(diags[0].message.contains("reviewer"));
-        assert!(diags[0].message.contains("impl-a"));
-        assert!(diags[0].message.contains("impl-b"));
-    }
-
-    #[test]
-    fn lint_no_warning_when_merge_present() {
-        let pipeline = PipelineDef {
-            name: "fan-out-with-merge".into(),
-            version: None,
-            variables: HashMap::new(),
-            nodes: vec![
-                make_isolated_node("impl-a"),
-                make_isolated_node("impl-b"),
-                make_merge_node("merger"),
-                make_shared_node("downstream"),
-            ],
-            edges: vec![
-                make_edge("impl-a", "out", "merger", "branches"),
-                make_edge("impl-b", "out", "merger", "branches"),
-                make_edge("merger", "merged", "downstream", "in"),
-            ],
-            loops: Vec::new(),
-            notes: Vec::new(),
-            prompt_required: true,
-            grid_size: None,
-        };
-        let diags = lint_missing_merge(&pipeline);
-        assert!(
-            diags.is_empty(),
-            "Merge downstream should suppress lint, got: {:?}",
-            diags.iter().map(|d| &d.message).collect::<Vec<_>>()
-        );
-    }
-
-    #[test]
-    fn lint_no_warning_for_single_cm_source() {
-        let pipeline = PipelineDef {
-            name: "single-cm".into(),
-            version: None,
-            variables: HashMap::new(),
-            nodes: vec![make_isolated_node("impl-a"), make_shared_node("reviewer")],
-            edges: vec![make_edge("impl-a", "out", "reviewer", "in")],
-            loops: Vec::new(),
-            notes: Vec::new(),
-            prompt_required: true,
-            grid_size: None,
-        };
-        let diags = lint_missing_merge(&pipeline);
-        assert!(diags.is_empty());
-    }
-
-    #[test]
-    fn lint_no_warning_for_shared_worktree_fan_out() {
-        let pipeline = PipelineDef {
-            name: "shared-worktree-fan-out".into(),
-            version: None,
-            variables: HashMap::new(),
-            nodes: vec![
-                make_shared_node("plan-a"),
-                make_shared_node("plan-b"),
-                make_shared_node("summary"),
-            ],
-            edges: vec![
-                make_edge("plan-a", "out", "summary", "in"),
-                make_edge("plan-b", "out", "summary", "in"),
-            ],
-            loops: Vec::new(),
-            notes: Vec::new(),
-            prompt_required: true,
-            grid_size: None,
-        };
-        let diags = lint_missing_merge(&pipeline);
-        assert!(diags.is_empty());
     }
 
     #[test]

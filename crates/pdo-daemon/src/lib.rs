@@ -137,8 +137,8 @@ use crate::scheduler_interpreter::{ActionOutcome, SpawnDedup};
 use crate::worktree_ops::{commit_and_merge_sub_worktree, create_sub_worktree};
 use crate::worktree_ops::{
     create_secondary_snapshot, create_worktree, remove_secondary_snapshot, rev_parse_verified,
-    secondary_snapshot_path, sub_worktree_branch, sub_worktree_path, validate_merge_resolution,
-    worktree_dir_for_run, worktree_has_tracked_changes,
+    secondary_snapshot_path, sub_worktree_branch, sub_worktree_path, worktree_dir_for_run,
+    worktree_has_tracked_changes,
 };
 
 const DEFAULT_PORT: u16 = 5172;
@@ -1361,9 +1361,6 @@ fn refusal_headline(slug: &str, body: &serde_json::Value) -> String {
                 .into()
         }
         "merge_conflict" => "merging your sub-worktree into the pipeline branch conflicted".into(),
-        "merge_resolution_failed" | "merge_resolver_failed" | "merge_resolver_spawned" => {
-            "the merge resolver did not settle the conflict".into()
-        }
         "completion_rejected" => body
             .get("message")
             .and_then(|v| v.as_str())
@@ -9229,14 +9226,10 @@ fn run_stall_reason(
         return None;
     }
 
-    // A live node or an in-flight merge resolver means the run can still advance
-    // organically — never reconcile under it.
+    // A live node means the run can still advance organically — never reconcile
+    // under it.
     let has_live_node = run_state.nodes.values().any(|n| n.status.can_progress());
-    let resolver_active = run_state
-        .merge_resolver
-        .as_ref()
-        .is_some_and(|mr| mr.status == event_log::NodeStatus::Running);
-    if has_live_node || resolver_active {
+    if has_live_node {
         return None;
     }
 
@@ -17807,15 +17800,13 @@ fn find_node_type<'a>(run_state: &'a event_log::RunState, node_id: &str) -> Opti
 /// fallback for one whose events predate #653.
 ///
 /// A snapshot that states the isolation is authoritative. Absent it, the type's
-/// default stands in: `merge` is isolated by construction, an `agent` is
-/// isolated, a `script` shares the Run worktree, and a structural node has no
-/// worktree of its own.
+/// default stands in: an `agent` is isolated, a `script` shares the Run
+/// worktree, and a structural node has no worktree of its own.
 fn snapshot_isolation(run_state: &event_log::RunState, node_id: &str) -> bool {
     let Some(def) = run_state.node_defs.iter().find(|nd| nd.id == node_id) else {
         return false;
     };
-    def.isolated_worktree
-        .unwrap_or(matches!(def.node_type.as_str(), "merge" | "agent"))
+    def.isolated_worktree.unwrap_or(def.node_type == "agent")
 }
 
 /// Where a node's iteration `iter` works (#653, ADR-0060): its FROZEN answer
@@ -17999,240 +17990,6 @@ async fn artifact(
     }
 }
 
-/// Spawn the automatic merge resolver. **DEAD in production** since ADR-0006:
-/// reached only from `DeliveryOutcome::ConflictPendingResolution`, which is built only
-/// under `keep_conflict == true`, which no production caller passes.
-///
-/// Returns a typed refusal rather than a `Response` (ADR-0035 §6): both outcomes —
-/// spawned, and spawn-failed — describe a completion that was **not** granted.
-async fn spawn_merge_resolver(
-    state: &AppState,
-    run_id: &str,
-    conflicting_node_id: &str,
-    conflicting_iter: i64,
-    worktree_dir: &std::path::Path,
-) -> completion_refusal::CompletionRefusal {
-    let prompt = load_merge_resolver_prompt(&state.repo_root);
-    let session_name = tmux_session_manager::node_session_name(run_id, MERGE_RESOLVER_NODE_ID, 1);
-
-    // The merge resolver runs inside the Run's container when sandboxed AND on the
-    // harness OF THE RUN. Project both from the SAME reload.
-    let (sandbox_mode, run_harness, run_agent_choice) = reload_run_state(state, run_id)
-        .await
-        .map(|(_, s)| (s.sandbox, s.harness, s.agent_choice))
-        .unwrap_or_default();
-
-    let resolver_started = event_log::Event {
-        id: None,
-        run_id: run_id.to_string(),
-        ts: event_log::now_iso(),
-        kind: event_log::EventKind::MergeResolverStarted,
-        node_id: None,
-        iter: None,
-        payload: Some(serde_json::json!({
-            "conflicting_node_id": conflicting_node_id,
-            "iter": conflicting_iter,
-            "session_name": session_name,
-        })),
-    };
-    let _ = append_event(state, &resolver_started).await;
-
-    // DEAD in production (ADR-0006); the resolver would follow the Run's harness, so
-    // an empty set env is acceptable here — it never runs a real pi session.
-    let resolver_set_env: Vec<(String, String)> = Vec::new();
-    let sandbox_wrap = (!sandbox_mode.is_off()).then(|| tmux_session_manager::SandboxWrap {
-        docker_bin: state.docker_cmd_override.as_deref().unwrap_or("docker"),
-        uid: sandbox_container::host_uid(),
-        gid: sandbox_container::host_gid(),
-        marker: &session_name,
-        workdir: worktree_dir,
-        set_env: &resolver_set_env,
-    });
-    // Follows the harness OF THE RUN, exactly like the manager: `Run → instance →
-    // floor`, no node tier, no model/effort. An unknown name falls back to `claude`
-    // with a warning.
-    let config = instance_config::get(&state.db).await.ok();
-    let profiles = agent_profile::snapshot(&state.db).await.unwrap_or_default();
-    let resolver_agent = agent_choice::resolve_infra(
-        run_agent_choice.as_ref(),
-        run_harness.as_deref(),
-        config.as_ref().and_then(|cfg| cfg.agent_choice.as_ref()),
-        config
-            .as_ref()
-            .and_then(|cfg| cfg.default_harness.as_deref()),
-        &profiles,
-        agent_profile::DEFAULT_PROFILE_ID,
-    );
-    let resolver_harness_name = resolver_agent.combo.harness.clone();
-    // Resolve against the DISK TIER, like the manager.
-    let resolver_home_root = sandbox_run::sandbox_home_roots(state)
-        .map(|(home, _)| home)
-        .unwrap_or_default();
-    let resolver_harness = harness_registry::HarnessRegistry::load(&resolver_home_root)
-        .resolve(&resolver_harness_name)
-        .unwrap_or_else(|| {
-            warn!(
-                "merge resolver for run {run_id}: unknown harness '{resolver_harness_name}' — \
-                 launching on the claude floor"
-            );
-            harness_registry::claude()
-        });
-    if let Err(e) = tmux_session_manager::spawn(
-        &session_name,
-        &prompt,
-        worktree_dir,
-        run_id,
-        MERGE_RESOLVER_NODE_ID,
-        1,
-        state.port,
-        state.tmux_cmd_override.as_deref(),
-        // No pinned session id: `__merge_resolver__` owns no `NodeStarted` and is
-        // neither probed nor resumed. NOT to be confused with a `merge` NODE, which is
-        // a regular NodeDef routed through `spawn_node` and DOES carry a pinned id.
-        tmux_session_manager::SessionTail::Agent {
-            harness: &resolver_harness,
-            model: resolver_agent.combo.model.as_deref(),
-            effort: resolver_agent.combo.effort.as_deref(),
-            session_id: None,
-        },
-        sandbox_wrap.as_ref(),
-        // An infra session: its `…/done` is handled by a distinct branch, not
-        // `complete_node_iteration`, so it gets no turn-end hook.
-        false,
-    ) {
-        error!("failed to spawn merge resolver tmux session: {e}");
-        let fail_event = event_log::Event {
-            id: None,
-            run_id: run_id.to_string(),
-            ts: event_log::now_iso(),
-            kind: event_log::EventKind::MergeResolverFailed,
-            node_id: None,
-            iter: None,
-            payload: Some(serde_json::json!({
-                "reason": format!("failed to spawn resolver session: {e}")
-            })),
-        };
-        let _ = append_event(state, &fail_event).await;
-        // ADR-0049: park `AwaitingUser`, never `RunFailed`.
-        let run_interrupted = event_log::Event {
-            id: None,
-            run_id: run_id.to_string(),
-            ts: event_log::now_iso(),
-            kind: event_log::EventKind::RunInterrupted,
-            node_id: None,
-            iter: None,
-            payload: Some(event_log::interrupt_payload(
-                "merge_resolver_spawn_failed",
-                "merge_resolver_spawn_failed: merge resolver spawn failed",
-            )),
-        };
-        let _ = append_event(state, &run_interrupted).await;
-
-        return completion_refusal::CompletionRefusal::MergeResolverFailed {
-            reason: format!("failed to spawn resolver session: {e}"),
-        };
-    }
-
-    info!("Spawned merge resolver for run {run_id} (conflict on {conflicting_node_id})");
-    completion_refusal::CompletionRefusal::MergeResolverSpawned {
-        node_id: conflicting_node_id.to_string(),
-    }
-}
-
-async fn handle_merge_resolver_done(
-    state: &AppState,
-    run_id: &str,
-    worktree_dir: &std::path::Path,
-    pre_run_state: &event_log::RunState,
-) -> Response {
-    let problems = match validate_merge_resolution(worktree_dir) {
-        Ok(p) => p,
-        Err(e) => {
-            error!("merge resolution validation error: {e}");
-            vec![format!("validation error: {e}")]
-        }
-    };
-
-    if !problems.is_empty() {
-        let reason = problems.join("; ");
-        let fail_event = event_log::Event {
-            id: None,
-            run_id: run_id.to_string(),
-            ts: event_log::now_iso(),
-            kind: event_log::EventKind::MergeResolverFailed,
-            node_id: None,
-            iter: None,
-            payload: Some(serde_json::json!({ "reason": reason })),
-        };
-        let _ = append_event(state, &fail_event).await;
-
-        // ADR-0049: park `AwaitingUser`, never `RunFailed`.
-        let run_interrupted = event_log::Event {
-            id: None,
-            run_id: run_id.to_string(),
-            ts: event_log::now_iso(),
-            kind: event_log::EventKind::RunInterrupted,
-            node_id: None,
-            iter: None,
-            payload: Some(event_log::interrupt_payload(
-                "merge_resolution_failed",
-                format!("merge_resolution_failed: {reason}"),
-            )),
-        };
-        let _ = append_event(state, &run_interrupted).await;
-
-        warn!("Merge resolver failed for run {run_id}: {reason}");
-        // `409` with the slug, never a `200`: the resolution was refused (ADR-0035).
-        return completion_refusal::refusal_response(
-            &completion_refusal::CompletionRefusal::MergeResolutionFailed { reason },
-        );
-    }
-
-    let completed_event = event_log::Event {
-        id: None,
-        run_id: run_id.to_string(),
-        ts: event_log::now_iso(),
-        kind: event_log::EventKind::MergeResolverCompleted,
-        node_id: None,
-        iter: None,
-        payload: None,
-    };
-    let _ = append_event(state, &completed_event).await;
-
-    info!("Merge resolver completed for run {run_id}");
-
-    if let Some(ref mr) = pre_run_state.merge_resolver {
-        let original_node_id = &mr.conflicting_node_id;
-        let original_iter = mr.iter;
-
-        let node_completed = event_log::Event {
-            id: None,
-            run_id: run_id.to_string(),
-            ts: event_log::now_iso(),
-            kind: event_log::EventKind::NodeCompleted,
-            node_id: Some(original_node_id.clone()),
-            iter: Some(original_iter),
-            payload: None,
-        };
-        if let Err(e) = append_event(state, &node_completed).await {
-            error!("failed to append node_completed for resolved node: {e}");
-        }
-
-        // `completed_node_id` is the ORIGINAL conflicting node, NOT the
-        // `__merge_resolver__` route param.
-        run_advance::complete_node(
-            state,
-            run_id,
-            original_node_id,
-            run_advance::CompletionOrder::CompletionFirst,
-            false,
-        )
-        .await;
-    }
-
-    (StatusCode::OK, "ok").into_response()
-}
-
 /// What the shared completion head decided, in the two shapes an HTTP caller must
 /// answer differently (ADR-0035).
 ///
@@ -18361,7 +18118,7 @@ impl CompletionSource {
 /// What one pass through [`complete_node_iteration`] did.
 ///
 /// Don't collapse these three: a single "aborted" variant conflated a refusal, a
-/// legal no-op and — at the merge-resolver site — an outright *success*, which is why
+/// legal no-op and — at the retired merge-resolver site — an outright *success*, which is why
 /// "an aborted attempt is never a 2xx" used to be false by construction. `Refused`
 /// carries a [`completion_refusal::CompletionRefusal`], a type that owns no status,
 /// so the invariant is enforced by the compiler.
@@ -18481,18 +18238,6 @@ async fn node_done(
         .map(|Json(b)| (b.iter.unwrap_or(1), b.auto))
         .unwrap_or((1, false));
 
-    // `__merge_resolver__` is handled HERE, hoisted out of the shared body
-    // (ADR-0035 §6): it was the one site whose "stopped short" was a complete
-    // *success*, which kept "a stopped-short attempt is never a 2xx" from being a
-    // total invariant. Hoisting also removes the transition-guard bypass the branch
-    // performed by sitting *before* the guard.
-    //
-    // Safe: the liveness sweep, the other caller of the shared body, can never reach
-    // this id — no resolver session is ever spawned (ADR-0006).
-    if node_id == MERGE_RESOLVER_NODE_ID {
-        return merge_resolver_done(&state, &run_id).await;
-    }
-
     let source = if auto {
         CompletionSource::StopHook
     } else {
@@ -18501,39 +18246,6 @@ async fn node_done(
     complete_node_iteration(&state, run_id, node_id, iter, source)
         .await
         .into_response()
-}
-
-/// The `__merge_resolver__` half of `POST …/nodes/:id/done` (ADR-0035 §6).
-///
-/// Order matters: the forgotten-run tombstone check (ADR-0024) must come **before**
-/// any side effect, then load + project.
-async fn merge_resolver_done(state: &Arc<AppState>, run_id: &str) -> Response {
-    match run_is_forgotten(&state.db, run_id).await {
-        Ok(true) => {
-            return completion_refusal::refusal_response(
-                &completion_refusal::CompletionRefusal::RunForgotten {
-                    run_id: run_id.to_string(),
-                },
-            );
-        }
-        Ok(false) => {}
-        Err(e) => {
-            return completion_refusal::refusal_response(
-                &completion_refusal::CompletionRefusal::Internal {
-                    error: format!("forgotten-run check failed: {e}"),
-                },
-            );
-        }
-    }
-
-    let Some((_, pre_run_state)) = reload_run_state(state, run_id).await else {
-        return completion_refusal::refusal_response(
-            &completion_refusal::CompletionRefusal::RunNotFound,
-        );
-    };
-    let repo_root = effective_repo_root(state, &pre_run_state);
-    let worktree_dir = worktree_dir_for_run(&repo_root, run_id);
-    handle_merge_resolver_done(state, run_id, &worktree_dir, &pre_run_state).await
 }
 
 /// The shared node-completion body: everything `POST …/done` does, for either
@@ -18668,7 +18380,6 @@ pub(crate) async fn deliver_node_run(
             &sub_branch,
             node_id,
             iter,
-            false,
             spawn_base.as_deref(),
         )
     };
@@ -18849,30 +18560,6 @@ pub(crate) async fn deliver_node_run(
             Some(completion_refusal::CompletionRefusal::MergeConflict {
                 node_id: node_id.to_string(),
             })
-        }
-        worktree_ops::DeliveryOutcome::ConflictPendingResolution(conflict) => {
-            let conflict_event = event_log::Event {
-                id: None,
-                run_id: run_id.to_string(),
-                ts: event_log::now_iso(),
-                kind: event_log::EventKind::MergeConflictDetected,
-                node_id: Some(node_id.to_string()),
-                iter: Some(iter),
-                payload: Some(serde_json::json!({
-                    "reason": format!("conflict merging {node_id} into pipeline branch"),
-                    "detail": conflict.detail,
-                    "pipeline_tip": conflict.pipeline_tip,
-                    "node_tip": conflict.node_tip,
-                    "conflicting_files": conflict.conflicting_files,
-                })),
-            };
-            let _ = append_event(state, &conflict_event).await;
-
-            // DEAD in production (ADR-0035 §6): `keep_conflict` is never `true`, so
-            // `ConflictPendingResolution` is never built. The two resolver arms
-            // ride the type at zero test cost; removing the whole vestigial
-            // subsystem is ADR-0006 fallout, not this ticket.
-            Some(spawn_merge_resolver(state, run_id, node_id, iter, worktree_dir).await)
         }
     }
 }
@@ -24052,17 +23739,6 @@ fn reap_dead_node_after_run_failure(
     );
 }
 
-const MERGE_RESOLVER_NODE_ID: &str = "__merge_resolver__";
-
-const FALLBACK_MERGE_RESOLVER_PROMPT: &str = "\
-You are the Merge Resolver. A git merge conflict occurred. \
-Resolve all conflicts, remove all conflict markers, and commit the merge.";
-
-fn load_merge_resolver_prompt(repo_root: &std::path::Path) -> String {
-    let path = repo_root.join("prompts/builtin/merge-resolver.md");
-    std::fs::read_to_string(&path).unwrap_or_else(|_| FALLBACK_MERGE_RESOLVER_PROMPT.to_string())
-}
-
 pub use guard_runner::GUARD_TIMEOUT_MS_OVERRIDE_ENV;
 pub use tmux_session_manager::{build_tmux_script, TMUX_CMD_OVERRIDE_ENV};
 
@@ -24406,9 +24082,9 @@ mod tests {
             ),
             ("name: n\ntype: start\n", serde_json::Value::Null),
             // #655: a stray line on a type that carries no isolation is dropped,
-            // not round-tripped — a Merge is isolated by construction.
+            // not round-tripped.
             (
-                "name: n\ntype: merge\nisolated_worktree: false\n",
+                "name: n\ntype: start\nisolated_worktree: false\n",
                 serde_json::Value::Null,
             ),
         ] {
@@ -34230,8 +33906,8 @@ mod tests {
     }
 
     // Node-completion tail convergence: the *observable* behaviour `complete_node`
-    // must preserve across all three entrypoints (`node_done`, the `mark_node_done`
-    // command arm, `handle_merge_resolver_done`).
+    // must preserve across both entrypoints (`node_done` and the `mark_node_done`
+    // command arm).
     //
     // The headline invariant is exactly-one `RunCompleted` per run: `append_event`
     // does NOT de-dup it, so a regression that double-routes completion surfaces here.
@@ -34352,106 +34028,6 @@ mod tests {
         assert_eq!(
             event_log::project(&events).unwrap().status,
             event_log::RunStatus::Completed
-        );
-    }
-
-    #[tokio::test]
-    async fn merge_resolver_done_records_original_node_and_completes_once() {
-        // Caller B (CompletionFirst, flag=false): resolving a conflict records the
-        // `NodeCompleted` under the ORIGINAL conflicting node id — never the
-        // `__merge_resolver__` pseudo-node — and completes the run exactly once.
-        // This caller's tail had zero coverage before #275.
-        let tmp = tempfile::tempdir().unwrap();
-        // The merge path first validates the run worktree is clean; an empty
-        // (non-repo) dir trivially has no conflict markers / tracked changes, so
-        // validation passes and we exercise the completion tail itself.
-        let worktree = tmp
-            .path()
-            .join(".pdo")
-            .join("runs")
-            .join("c275-merge")
-            .join("worktree");
-        std::fs::create_dir_all(&worktree).unwrap();
-
-        let state = test_state_with_dir(tmp.path()).await;
-        let run_id = "c275-merge";
-        for ev in [
-            seed_event(
-                run_id,
-                event_log::EventKind::RunStarted,
-                None,
-                None,
-                Some(serde_json::json!({
-                    "pipeline_name": "conflict",
-                    "node_defs": [
-                        { "id": "worker", "node_type": "agent", "isolated_worktree": true, "inputs": [], "outputs": [] }
-                    ],
-                    "edges": []
-                })),
-            ),
-            seed_event(
-                run_id,
-                event_log::EventKind::NodeStarted,
-                Some("worker"),
-                Some(1),
-                None,
-            ),
-            seed_event(
-                run_id,
-                event_log::EventKind::MergeResolverStarted,
-                None,
-                None,
-                Some(serde_json::json!({
-                    "conflicting_node_id": "worker",
-                    "iter": 1,
-                    "session_name": "pdo-c275-merge-__merge_resolver__-iter-1"
-                })),
-            ),
-        ] {
-            append_event(&state, &ev).await.unwrap();
-        }
-
-        let resp = build_router(state.clone())
-            .oneshot(
-                Request::builder()
-                    .method("POST")
-                    .uri(format!(
-                        "/runs/{run_id}/nodes/{MERGE_RESOLVER_NODE_ID}/done"
-                    ))
-                    .header("content-type", "application/json")
-                    .body(Body::from("{}"))
-                    .unwrap(),
-            )
-            .await
-            .unwrap();
-        assert_eq!(resp.status(), StatusCode::OK);
-
-        let events = load_events(&state.db, run_id).await.unwrap();
-        assert!(
-            events
-                .iter()
-                .any(|e| e.kind == event_log::EventKind::MergeResolverCompleted),
-            "merge resolver completion is recorded"
-        );
-        // The resolved work is attributed to the ORIGINAL node, not the pseudo-node.
-        assert_eq!(
-            count_events(&events, event_log::EventKind::NodeCompleted, "worker"),
-            1,
-            "NodeCompleted recorded for the original conflicting node"
-        );
-        assert_eq!(
-            count_events(
-                &events,
-                event_log::EventKind::NodeCompleted,
-                MERGE_RESOLVER_NODE_ID
-            ),
-            0,
-            "no NodeCompleted for the __merge_resolver__ pseudo-node"
-        );
-        assert_eq!(
-            count_run_completed(&events),
-            1,
-            "merge-resolver completion must emit exactly one RunCompleted"
         );
     }
 
@@ -43075,28 +42651,6 @@ edges:
         );
     }
 
-    #[test]
-    fn builtin_merge_resolver_prompt_loads_from_file() {
-        let prompt = load_merge_resolver_prompt(std::path::Path::new("."));
-        assert!(
-            prompt.contains("Merge Resolver"),
-            "prompt should contain 'Merge Resolver', got first 100 chars: {}",
-            &prompt[..prompt.len().min(100)]
-        );
-    }
-
-    #[test]
-    fn builtin_merge_resolver_prompt_falls_back_when_missing() {
-        let tmp = tempfile::tempdir().unwrap();
-        let prompt = load_merge_resolver_prompt(tmp.path());
-        assert_eq!(prompt, FALLBACK_MERGE_RESOLVER_PROMPT);
-    }
-
-    #[test]
-    fn merge_resolver_node_id_is_dunder() {
-        assert_eq!(MERGE_RESOLVER_NODE_ID, "__merge_resolver__");
-    }
-
     #[tokio::test]
     #[allow(clippy::await_holding_lock)]
     async fn library_full_flow() {
@@ -43525,8 +43079,8 @@ edges: []
         // key off such a node entirely.
         let saved = save_to_library(Json(
             serde_json::from_value(serde_json::json!({
-                "name": "Gatherer",
-                "type": "merge",
+                "name": "Router",
+                "type": "switch",
                 "isolated_worktree": false,
                 "prompt": "",
             }))
@@ -43537,10 +43091,10 @@ edges: []
             body_of(saved).await["isolated_worktree"],
             serde_json::Value::Null
         );
-        let spec = body_of(instantiate_from_library(AxumPath("Gatherer".to_string())).await).await;
+        let spec = body_of(instantiate_from_library(AxumPath("Router".to_string())).await).await;
         assert_eq!(spec["spec"]["isolated_worktree"], serde_json::Value::Null);
 
-        for name in ["SharedScribe", "SilentScribe", "Gatherer"] {
+        for name in ["SharedScribe", "SilentScribe", "Router"] {
             let _ = library_store::delete(name);
         }
         if let Some(p) = prev_home {

@@ -78,25 +78,6 @@ pub(crate) enum CompletionRefusal {
     AppendFailed {
         error: String,
     },
-    /// Résolveur de merge : la résolution n'est pas valide ; `MergeResolverFailed`
-    /// + `RunFailed` appendés.
-    MergeResolutionFailed {
-        reason: String,
-    },
-    /// Résolveur de merge spawné. **INATTEIGNABLE** en production :
-    /// `MergeResult::ConflictPendingResolution` n'est construit que sous
-    /// `keep_conflict == true`, qu'aucun appelant de production ne passe, et
-    /// ADR-0006 a retiré le résolveur automatique. Conservé sous le type le temps
-    /// de la retombée d'ADR-0006, qui supprimera le sous-système entier — coût de
-    /// test nul ici, et le supprimer sous un fix de bug mélangerait deux
-    /// intentions (ADR-0035 §6).
-    MergeResolverSpawned {
-        node_id: String,
-    },
-    /// Résolveur de merge : le spawn a échoué. **INATTEIGNABLE**, cf. ci-dessus.
-    MergeResolverFailed {
-        reason: String,
-    },
     /// Liaison forte orchestrateur ↔ enfants (#724 / ADR-0064) : le nœud est
     /// orchestrator (toggle gelé au démarrage du Run) et ses runs enfants (mêmes
     /// `parent_run_id` + `parent_node_id`) ne sont pas tous terminaux. Le nœud
@@ -132,9 +113,6 @@ impl CompletionRefusal {
             Self::FrontmatterRetryExhausted { .. } => "frontmatter_retry_exhausted",
             Self::SecondaryRepoDirtied { .. } => "secondary_repo_dirtied",
             Self::AppendFailed { .. } => "append_failed",
-            Self::MergeResolutionFailed { .. } => "merge_resolution_failed",
-            Self::MergeResolverSpawned { .. } => "merge_resolver_spawned",
-            Self::MergeResolverFailed { .. } => "merge_resolver_failed",
             Self::ChildrenPending { .. } => "children_pending",
         }
     }
@@ -174,9 +152,6 @@ impl CompletionRefusal {
             | Self::FrontmatterRetryPending { .. }
             | Self::FrontmatterRetryExhausted { .. }
             | Self::SecondaryRepoDirtied { .. }
-            | Self::MergeResolutionFailed { .. }
-            | Self::MergeResolverSpawned { .. }
-            | Self::MergeResolverFailed { .. }
             | Self::ChildrenPending { .. } => StatusCode::CONFLICT,
         }
     }
@@ -210,12 +185,6 @@ impl CompletionRefusal {
             Self::SecondaryRepoDirtied { alias, message } => serde_json::json!({
                 "alias": alias,
                 "message": message,
-            }),
-            Self::MergeResolutionFailed { reason } | Self::MergeResolverFailed { reason } => {
-                serde_json::json!({ "reason": reason })
-            }
-            Self::MergeResolverSpawned { node_id } => serde_json::json!({
-                "message": format!("merge conflict on {node_id}: resolver spawned")
             }),
             Self::ChildrenPending {
                 node_id,
@@ -261,13 +230,6 @@ impl CompletionRefusal {
             }
             Self::AppendFailed { error } => {
                 format!("failed to append the terminal event: {error}")
-            }
-            Self::MergeResolutionFailed { reason } => format!("merge resolution failed: {reason}"),
-            Self::MergeResolverSpawned { node_id } => {
-                format!("merge conflict on {node_id}: resolver spawned")
-            }
-            Self::MergeResolverFailed { reason } => {
-                format!("merge resolver spawn failed: {reason}")
             }
             Self::ChildrenPending {
                 node_id,
@@ -367,15 +329,6 @@ mod tests {
             CompletionRefusal::AppendFailed {
                 error: "disk full".into(),
             },
-            CompletionRefusal::MergeResolutionFailed {
-                reason: "still conflicted".into(),
-            },
-            CompletionRefusal::MergeResolverSpawned {
-                node_id: "impl".into(),
-            },
-            CompletionRefusal::MergeResolverFailed {
-                reason: "spawn failed".into(),
-            },
             CompletionRefusal::ChildrenPending {
                 node_id: "orch".into(),
                 active: 2,
@@ -401,9 +354,6 @@ mod tests {
                 CompletionRefusal::FrontmatterRetryExhausted { .. } => "FrontmatterRetryExhausted",
                 CompletionRefusal::SecondaryRepoDirtied { .. } => "SecondaryRepoDirtied",
                 CompletionRefusal::AppendFailed { .. } => "AppendFailed",
-                CompletionRefusal::MergeResolutionFailed { .. } => "MergeResolutionFailed",
-                CompletionRefusal::MergeResolverSpawned { .. } => "MergeResolverSpawned",
-                CompletionRefusal::MergeResolverFailed { .. } => "MergeResolverFailed",
                 CompletionRefusal::ChildrenPending { .. } => "ChildrenPending",
             };
             seen.insert(key);

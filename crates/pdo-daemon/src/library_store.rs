@@ -41,7 +41,7 @@ pub(crate) struct LibraryEntry {
     /// Always `Some` for `agent`/`script` (stamped by [`normalized_isolation`]
     /// on every read and write, so a pre-#655 file states its choice too), and
     /// always `None` for the types that carry none. `skip_serializing_if` is
-    /// what keeps a starred Merge/Start/End file free of a line nobody may edit.
+    /// what keeps a starred Start/End file free of a line nobody may edit.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub isolated_worktree: Option<bool>,
 }
@@ -52,7 +52,7 @@ impl LibraryEntry {
     /// The type has the last word on *whether* there is a choice at all, and the
     /// entry has the last word on *which* — the same precedence
     /// `NodeDef::is_isolated` uses, so the library and the Document cannot read
-    /// one silence two ways. A stray value on a Merge is dropped rather than
+    /// one silence two ways. A stray value on a Start/End is dropped rather than
     /// round-tripped, mirroring `pipeline::stamp_isolation_default`.
     fn normalized_isolation(&self) -> Option<bool> {
         let default = self.node_type.default_isolation()?;
@@ -797,7 +797,7 @@ pub(crate) mod pipelines {
 
     /// Rewrite **only** the value of the single column-0 `name:` line, preserving
     /// every other byte (comments, key order, unknown top-level keys like
-    /// `auto_merge_resolver`, and per-line terminators). Node `name:` lines are
+    /// `legacy_top_level_key`, and per-line terminators). Node `name:` lines are
     /// indented, so anchoring on a column-0 `name:` is unambiguous. Returns `Err`
     /// if no such line exists (the source would fail the required-`name` parse).
     fn rewrite_top_level_name(yaml: &str, new_name: &str) -> Result<String, String> {
@@ -958,10 +958,10 @@ pub(crate) mod pipelines {
 
         #[test]
         fn rewrite_top_level_name_preserves_unknown_keys_and_comments() {
-            let yaml = "# leading comment\nname: review-loop\nversion: \"1.0\"\nnodes:\n  - id: end\n    name: End\n    type: end\nauto_merge_resolver: true\n";
+            let yaml = "# leading comment\nname: review-loop\nversion: \"1.0\"\nnodes:\n  - id: end\n    name: End\n    type: end\nlegacy_top_level_key: true\n";
             let out = rewrite_top_level_name(yaml, "review-loop (copy)").unwrap();
             assert!(out.contains("# leading comment\n"));
-            assert!(out.contains("\nauto_merge_resolver: true\n"));
+            assert!(out.contains("\nlegacy_top_level_key: true\n"));
             assert!(out.contains("name: \"review-loop (copy)\"\n"));
             let strip_name = |s: &str| {
                 s.lines()
@@ -1431,20 +1431,20 @@ mod tests {
 
         // A type that carries no isolation drops a stray value rather than
         // round-tripping a line nobody may edit (mirrors `stamp_isolation_default`).
-        agent.node_type = pipeline::NodeType::Merge;
+        agent.node_type = pipeline::NodeType::Switch;
         agent.isolated_worktree = Some(false);
         assert_eq!(entry_from_node(&agent, "p").isolated_worktree, None);
     }
 
-    /// A starred Merge/Start/End writes no isolation line at all.
+    /// A starred Start/End/Switch writes no isolation line at all.
     #[test]
     fn isolation_key_is_absent_for_types_that_carry_none() {
-        let mut node = make_node("Gatherer");
-        node.node_type = pipeline::NodeType::Merge;
+        let mut node = make_node("Router");
+        node.node_type = pipeline::NodeType::Switch;
         let yaml = serde_yaml::to_string(&entry_from_node(&node, "p")).unwrap();
         assert!(
             !yaml.contains("isolated_worktree"),
-            "isolation leaked onto a Merge entry:\n{yaml}"
+            "isolation leaked onto a Switch entry:\n{yaml}"
         );
     }
 
@@ -2788,10 +2788,10 @@ mod tests {
     }
 
     /// A library YAML with a leading comment and a non-`PipelineDef` top-level
-    /// key (`auto_merge_resolver`) — the byte-fidelity bait.
+    /// key (`legacy_top_level_key`) — the byte-fidelity bait.
     fn fixture_with_extras(name: &str) -> String {
         format!(
-            "# a comment that must survive\nname: {name}\nversion: \"1.0\"\nnodes:\n  - id: start\n    name: Start\n    type: start\n    outputs:\n      - name: user_prompt\n  - id: end\n    name: End\n    type: end\n    inputs:\n      - name: result\nauto_merge_resolver: true\n"
+            "# a comment that must survive\nname: {name}\nversion: \"1.0\"\nnodes:\n  - id: start\n    name: Start\n    type: start\n    outputs:\n      - name: user_prompt\n  - id: end\n    name: End\n    type: end\n    inputs:\n      - name: result\nlegacy_top_level_key: true\n"
         )
     }
 
@@ -2839,7 +2839,7 @@ mod tests {
                 std::fs::read_to_string(lib_dir.join(format!("{copy_id}.yaml"))).unwrap();
 
             assert!(
-                copy_yaml.contains("\nauto_merge_resolver: true\n"),
+                copy_yaml.contains("\nlegacy_top_level_key: true\n"),
                 "unknown top-level key must survive: {copy_yaml}"
             );
             assert!(copy_yaml.starts_with("# a comment that must survive\n"));

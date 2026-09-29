@@ -620,7 +620,7 @@ export interface UpdateChangelog {
 // of launching Claude; the FE union is not 1:1 with the backend enum.
 // `agent` (#653 / ADR-0060) replaces `doc-only` and `code-mutating`: the type
 // names the execution role, and where the NodeRun works is `isolated_worktree`.
-export type NodeType = "agent" | "start" | "end" | "merge" | "script";
+export type NodeType = "agent" | "start" | "end" | "script";
 
 export interface RunListEntry {
   run_id: string;
@@ -1495,8 +1495,7 @@ export interface NodeDef {
   /** #653/ADR-0060: where this node's NodeRun works — `true` a sub-worktree of
    *  its own, `false` the Run's shared worktree. Carried by `agent` and `script`
    *  only, and ALWAYS serialized for them (including at the default), so a
-   *  document never leaves the reader to guess. Absent on `merge` (isolated by
-   *  construction) and on structural nodes. */
+   *  document never leaves the reader to guess. Absent on structural nodes. */
   isolated_worktree?: boolean | null;
   /** #723/ADR-0064: the « Orchestrator » toggle. `true` ⇒ the node's NodeRun is
    *  held by the strong orchestrator↔children binding while its child runs are

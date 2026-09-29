@@ -229,6 +229,11 @@ export default function OrthogonalEdge({
       target: targetPt,
       obstacles,
       targetSide: data?.targetSide,
+      sourceSide: srcSide,
+      sourceRect: srcRect ?? undefined,
+      // Half a cell past the leg, so the lattice snap below never rounds the
+      // router's first bend back inside the source leg.
+      sourceStub: leg + step / 2,
     });
     // `manual: false`: the router's bends are not the user's pins, so a wire that
     // has to go around its target is re-laid from its last real corner.
@@ -241,7 +246,7 @@ export default function OrthogonalEdge({
       { manual: false },
     );
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [mode, waypoints, sourcePt.x, sourcePt.y, targetPt.x, targetPt.y, obstacles, data?.targetSide, srcSide, tgtSide, step, leg, tgtRect]);
+  }, [mode, waypoints, sourcePt.x, sourcePt.y, targetPt.x, targetPt.y, obstacles, data?.targetSide, srcSide, tgtSide, step, leg, srcRect, tgtRect]);
 
   const d = pathToSvg(points);
   // The first and last segments are the perpendicular legs into the two anchors:

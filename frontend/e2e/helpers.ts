@@ -43,7 +43,8 @@ export function runMultipart(fields: Record<string, string>): Record<string, str
  * its stable test id, not its label), then click the entry by name.
  *
  * Replaces the pre-canvas-refonte `[data-testid='edit-toggle']` flow, which no
- * longer exists — pipelines are opened from the Library tab now (#146).
+ * longer exists — pipelines are opened from the left panel's pipelines tab
+ * (#146). Targeted by test id, not label: the tab reads « Pipelines » now.
  */
 export async function openPipelineForEdit(page: Page, name: string): Promise<void> {
   await page.getByTestId("left-tab-library").click();

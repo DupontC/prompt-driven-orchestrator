@@ -7,8 +7,8 @@
 //! `&str` / `i64` in, path math or a shell-out to `git`/`std::fs` out.
 //!
 //! Keep this module a pure worktree-lifecycle surface: `MergeResult` (the git
-//! *effect*) belongs here; it is deliberately distinct from `MergeOutcome`
-//! (`merge_action.rs` — the pure merge *decision* type). Do not conflate them.
+//! *effect*) belongs here; the pure reads that feed it (`spawn_base_sha`,
+//! `frozen_isolation`) live in `merge_action.rs`.
 
 use std::path::{Path, PathBuf};
 
@@ -622,11 +622,9 @@ pub(crate) enum MergeResult {
     /// a merge commit carrying the node's tree. Not a failure — and never silent.
     ResolvedInNodeFavour(MergeAdoption),
     Conflict(MergeConflict),
-    ConflictPendingResolution(MergeConflict),
 }
 
-/// Test shim, deliberately on the **conservative** arm: `keep_conflict` off and no
-/// spawn base, so a conflict still reads `MergeResult::Conflict` here. A test that
+/// Test shim, deliberately on the **conservative** arm: no spawn base, so a conflict still reads `MergeResult::Conflict` here. A test that
 /// wants the #503 adoption path calls `commit_and_merge_sub_worktree_inner` and
 /// passes the base it cut from.
 #[cfg(test)]
@@ -643,7 +641,6 @@ pub(crate) fn commit_and_merge_sub_worktree(
         sub_branch,
         node_id,
         iter,
-        false,
         None,
     )
 }
@@ -822,7 +819,6 @@ pub(crate) enum DeliveryOutcome {
     /// The merge-back conflicted and was resolved in the node's favour (#503).
     ResolvedInNodeFavour(MergeAdoption),
     Conflict(MergeConflict),
-    ConflictPendingResolution(MergeConflict),
 }
 
 /// **The** delivery: keep the NodeRun's own commits, commit whatever it left
@@ -852,7 +848,6 @@ pub(crate) fn deliver_node_work(
     sub_branch: &str,
     node_id: &str,
     iter: i64,
-    keep_conflict: bool,
     spawn_base: Option<&str>,
 ) -> Result<DeliveryOutcome> {
     let before = rev_parse(run_worktree_dir, "HEAD")?;
@@ -876,7 +871,6 @@ pub(crate) fn deliver_node_work(
         sub_branch,
         node_id,
         iter,
-        keep_conflict,
         spawn_base,
     )?;
 
@@ -889,7 +883,6 @@ pub(crate) fn deliver_node_work(
             DeliveryOutcome::ResolvedInNodeFavour(adoption)
         }
         MergeResult::Conflict(c) => DeliveryOutcome::Conflict(c),
-        MergeResult::ConflictPendingResolution(c) => DeliveryOutcome::ConflictPendingResolution(c),
     })
 }
 
@@ -903,7 +896,6 @@ pub(crate) fn commit_and_merge_sub_worktree_inner(
     sub_branch: &str,
     node_id: &str,
     iter: i64,
-    keep_conflict: bool,
     spawn_base: Option<&str>,
 ) -> Result<MergeResult> {
     // The node's own commits are kept; only what it left uncommitted becomes a
@@ -941,9 +933,6 @@ pub(crate) fn commit_and_merge_sub_worktree_inner(
             conflicting_files: unmerged_paths(pipeline_worktree_dir),
         };
 
-        if keep_conflict {
-            return Ok(MergeResult::ConflictPendingResolution(conflict));
-        }
         let _ = std::process::Command::new("git")
             .args(["merge", "--abort"])
             .current_dir(pipeline_worktree_dir)
@@ -1205,30 +1194,6 @@ pub(crate) fn worktree_has_tracked_changes(worktree_dir: &std::path::Path) -> Re
 
     let status = String::from_utf8_lossy(&output.stdout);
     Ok(status.lines().any(|line| !line.starts_with("??")))
-}
-
-pub(crate) fn has_conflict_markers(worktree_dir: &std::path::Path) -> Result<bool> {
-    let output = std::process::Command::new("git")
-        .args(["grep", "-rlE", "^<{7} |^={7}$|^>{7} "])
-        .current_dir(worktree_dir)
-        .output()
-        .context("git grep failed")?;
-
-    Ok(output.status.success() && !output.stdout.is_empty())
-}
-
-pub(crate) fn validate_merge_resolution(worktree_dir: &std::path::Path) -> Result<Vec<String>> {
-    let mut problems = Vec::new();
-
-    if has_conflict_markers(worktree_dir)? {
-        problems.push("conflict markers remain in tracked files".to_string());
-    }
-
-    if worktree_has_tracked_changes(worktree_dir)? {
-        problems.push("working tree is not clean (uncommitted changes)".to_string());
-    }
-
-    Ok(problems)
 }
 
 pub(crate) fn create_worktree(
@@ -1619,7 +1584,6 @@ mod tests {
             &node.sub_branch,
             "ship",
             1,
-            false,
             Some(&node.spawn_base),
         )
         .unwrap();
@@ -1660,7 +1624,6 @@ mod tests {
             &node.sub_branch,
             "ship",
             1,
-            false,
             Some(&node.spawn_base),
         )
         .unwrap();
@@ -1732,7 +1695,6 @@ mod tests {
             &sub_branch_1,
             "impl-1",
             1,
-            false,
             Some(&base_1),
         )
         .unwrap();
@@ -1744,7 +1706,6 @@ mod tests {
             &sub_branch_2,
             "impl-2",
             1,
-            false,
             Some(&base_2),
         )
         .unwrap();
@@ -1790,7 +1751,6 @@ mod tests {
             &node.sub_branch,
             "ship",
             1,
-            false,
             Some(&node.spawn_base),
         )
         .unwrap();
@@ -1817,7 +1777,6 @@ mod tests {
             &node.sub_branch,
             "ship",
             1,
-            false,
             None,
         )
         .unwrap();
@@ -1837,7 +1796,6 @@ mod tests {
             &node.sub_branch,
             "ship",
             1,
-            false,
             None,
         )
         .unwrap();
@@ -1867,7 +1825,6 @@ mod tests {
             &node.sub_branch,
             "ship",
             1,
-            false,
             None,
         )
         .unwrap();
@@ -1903,7 +1860,6 @@ mod tests {
             &node.sub_branch,
             "ship",
             1,
-            false,
             Some(&node.spawn_base),
         )
         .unwrap();
@@ -2139,10 +2095,8 @@ mod tests {
         create_worktree(repo, &wt_dir, &pipeline_branch, "HEAD").unwrap();
         std::fs::write(wt_dir.join("shared.rs"), "pub fn shared() {}\n").unwrap();
 
-        let outcome = deliver_node_work(
-            &wt_dir, &wt_dir, false, "unused", "shared-1", 1, false, None,
-        )
-        .unwrap();
+        let outcome =
+            deliver_node_work(&wt_dir, &wt_dir, false, "unused", "shared-1", 1, None).unwrap();
         let DeliveryOutcome::Delivered(d) = outcome else {
             panic!("a non-isolated delivery never conflicts");
         };
@@ -2182,10 +2136,8 @@ mod tests {
             .unwrap();
         assert!(staged.status.success());
 
-        let outcome = deliver_node_work(
-            &wt_dir, &wt_dir, false, "unused", "shared-1", 1, false, None,
-        )
-        .unwrap();
+        let outcome =
+            deliver_node_work(&wt_dir, &wt_dir, false, "unused", "shared-1", 1, None).unwrap();
         let DeliveryOutcome::Delivered(delivered) = outcome else {
             panic!("expected a delivery");
         };
@@ -2216,10 +2168,8 @@ mod tests {
         let wt_dir = repo.join(".pdo/runs").join(run_id).join("worktree");
         create_worktree(repo, &wt_dir, &format!("pdo/run-{run_id}"), "HEAD").unwrap();
 
-        let outcome = deliver_node_work(
-            &wt_dir, &wt_dir, false, "unused", "shared-1", 1, false, None,
-        )
-        .unwrap();
+        let outcome =
+            deliver_node_work(&wt_dir, &wt_dir, false, "unused", "shared-1", 1, None).unwrap();
         let DeliveryOutcome::Delivered(d) = outcome else {
             panic!("expected a delivery");
         };
@@ -2243,17 +2193,8 @@ mod tests {
         create_sub_worktree(repo, &sub_wt, &sub_branch, &pipeline_branch).unwrap();
         std::fs::write(sub_wt.join("forked.rs"), "pub fn forked() {}\n").unwrap();
 
-        let outcome = deliver_node_work(
-            &wt_dir,
-            &sub_wt,
-            true,
-            &sub_branch,
-            "forked-1",
-            1,
-            false,
-            None,
-        )
-        .unwrap();
+        let outcome =
+            deliver_node_work(&wt_dir, &sub_wt, true, &sub_branch, "forked-1", 1, None).unwrap();
         let DeliveryOutcome::Delivered(d) = outcome else {
             panic!("a clean merge-back delivers");
         };
@@ -2290,17 +2231,8 @@ mod tests {
         crate::provisioning::provision_missing(repo, &sub_wt, &plan).unwrap();
         std::fs::write(sub_wt.join("isolated-work.rs"), "pub fn isolated() {}\n").unwrap();
 
-        let outcome = deliver_node_work(
-            &wt_dir,
-            &sub_wt,
-            true,
-            &sub_branch,
-            "forked-1",
-            1,
-            false,
-            None,
-        )
-        .unwrap();
+        let outcome =
+            deliver_node_work(&wt_dir, &sub_wt, true, &sub_branch, "forked-1", 1, None).unwrap();
         let DeliveryOutcome::Delivered(delivered) = outcome else {
             panic!("expected a delivery");
         };
@@ -2382,106 +2314,6 @@ mod tests {
         std::fs::write(port_dir.join("output.md"), "# plan\n").unwrap();
 
         assert!(!worktree_has_tracked_changes(&wt_dir).unwrap());
-    }
-
-    #[test]
-    fn validate_merge_resolution_clean_worktree() {
-        let tmp = tempfile::tempdir().unwrap();
-        let repo = tmp.path();
-        init_test_repo(repo);
-
-        let problems = validate_merge_resolution(repo).unwrap();
-        assert!(
-            problems.is_empty(),
-            "clean repo should pass validation, got: {problems:?}"
-        );
-    }
-
-    #[test]
-    fn validate_merge_resolution_detects_conflict_markers() {
-        let tmp = tempfile::tempdir().unwrap();
-        let repo = tmp.path();
-        init_test_repo(repo);
-
-        std::fs::write(
-            repo.join("conflict.txt"),
-            "before\n<<<<<<< HEAD\nours\n=======\ntheirs\n>>>>>>> branch\nafter\n",
-        )
-        .unwrap();
-        let _ = std::process::Command::new("git")
-            .args(["add", "conflict.txt"])
-            .current_dir(repo)
-            .output();
-
-        let problems = validate_merge_resolution(repo).unwrap();
-        assert!(
-            problems.iter().any(|p| p.contains("conflict markers")),
-            "should detect conflict markers, got: {problems:?}"
-        );
-    }
-
-    #[test]
-    fn validate_merge_resolution_detects_uncommitted_changes() {
-        let tmp = tempfile::tempdir().unwrap();
-        let repo = tmp.path();
-        init_test_repo(repo);
-
-        std::fs::write(repo.join("README.md"), "# modified\n").unwrap();
-
-        let problems = validate_merge_resolution(repo).unwrap();
-        assert!(
-            problems.iter().any(|p| p.contains("not clean")),
-            "should detect dirty worktree, got: {problems:?}"
-        );
-    }
-
-    #[test]
-    fn conflict_pending_resolution_keeps_markers() {
-        let tmp = tempfile::tempdir().unwrap();
-        let repo = tmp.path();
-        init_test_repo(repo);
-
-        let run_id = "test-pending";
-        let wt_dir = repo.join(".pdo/runs").join(run_id).join("worktree");
-        let pipeline_branch = format!("pdo/run-{run_id}");
-        create_worktree(repo, &wt_dir, &pipeline_branch, "HEAD").unwrap();
-
-        let sub_wt_1 = sub_worktree_path(repo, run_id, "impl-1", 1);
-        let sub_branch_1 = sub_worktree_branch(run_id, "impl-1", 1);
-        create_sub_worktree(repo, &sub_wt_1, &sub_branch_1, &pipeline_branch).unwrap();
-
-        let sub_wt_2 = sub_worktree_path(repo, run_id, "impl-2", 1);
-        let sub_branch_2 = sub_worktree_branch(run_id, "impl-2", 1);
-        create_sub_worktree(repo, &sub_wt_2, &sub_branch_2, &pipeline_branch).unwrap();
-
-        std::fs::write(sub_wt_1.join("shared.txt"), "from impl-1\n").unwrap();
-        std::fs::write(sub_wt_2.join("shared.txt"), "from impl-2\n").unwrap();
-
-        let r1 =
-            commit_and_merge_sub_worktree(&sub_wt_1, &wt_dir, &sub_branch_1, "impl-1", 1).unwrap();
-        assert!(matches!(r1, MergeResult::Success));
-
-        let r2 = commit_and_merge_sub_worktree_inner(
-            &sub_wt_2,
-            &wt_dir,
-            &sub_branch_2,
-            "impl-2",
-            1,
-            true,
-            None,
-        )
-        .unwrap();
-        assert!(
-            matches!(r2, MergeResult::ConflictPendingResolution(_)),
-            "expected ConflictPendingResolution"
-        );
-
-        // Conflict markers should remain in worktree (merge NOT aborted)
-        let content = std::fs::read_to_string(wt_dir.join("shared.txt")).unwrap();
-        assert!(
-            content.contains("<<<<<<<"),
-            "conflict markers should remain in the file"
-        );
     }
 
     #[test]

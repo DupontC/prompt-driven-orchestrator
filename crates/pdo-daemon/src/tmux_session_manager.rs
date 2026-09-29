@@ -68,7 +68,7 @@ pub const SCRIPT_TIMEOUT_SECS: u64 = 60;
 /// `pdo fail` — no LLM, no `tmux_cmd_override` (a script *is* deterministic
 /// bash, so the test seam must not clobber it).
 pub enum SessionTail<'a> {
-    /// Agent node / manager / merge-resolver. `model` is the per-node model
+    /// Agent node / manager. `model` is the per-node model
     /// override (#296); `None` ⇒ account default (byte-identical legacy launch).
     Agent {
         /// The resolved harness descriptor (#550, ADR-0045). Its `launch`
@@ -89,7 +89,7 @@ pub enum SessionTail<'a> {
         /// *identity* instead of by the newest `.jsonl` in a cwd it shares with the
         /// manager and any sibling non-isolated node. `None` *or* an
         /// empty string ⇒ no `--session-id`, byte-identical legacy tail — the state
-        /// for infra sessions (`__manager__` / `__merge_resolver__`) that own no
+        /// for infra sessions (`__manager__`) that own no
         /// `NodeStarted`, are never probed by the sweep and are never resumed.
         session_id: Option<&'a str>,
     },
@@ -773,7 +773,7 @@ pub fn spawn(
     // file beside the prompt and reference it via `claude --settings`, so a `Stop`
     // hook runs `pdo complete --auto` at every turn end. Same lifecycle as the
     // prompt (gitignored under `.pdo/`, resolves identically host and container).
-    // Callers pass `false` for `script`/manager/merge-resolver sessions; the tail
+    // Callers pass `false` for `script`/manager sessions; the tail
     // selector in `build_tmux_script` is the belt-and-suspenders guard.
     //
     // #613/ADR-0051 (correctif 8): write the claude-format settings file ONLY for a
@@ -3932,7 +3932,7 @@ mod tests {
 
     #[test]
     fn build_script_omits_session_id_when_none_or_empty() {
-        // #473: `None` OR `Some("")` (an infra session — manager / merge resolver)
+        // #473: `None` OR `Some("")` (an infra session — the manager)
         // emits no `--session-id`, byte-identical to the legacy tail. This is what
         // keeps the pre-#473 launch bytes for the sessions the sweep never probes.
         for sid in [None, Some("")] {

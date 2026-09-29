@@ -10,6 +10,27 @@ ascendante** : la casse se signale ici et par un bump majeur, jamais en gardant 
 morts. Seule contrainte non négociable — les **données historiques restent lisibles** : un Run
 archivé s'ouvre et se chiffre quelle que soit la version qui a écrit son payload.
 
+## 1.113.0 — Le nœud Merge est retiré (#942, spec #941, ADR-0079)
+
+- Le type de nœud `merge` disparaît de l'éditeur, du modèle et du runtime. La convergence est
+  portée par **tout nœud** : reliez plusieurs arêtes à un `agent`, il attend que chaque branche
+  ait firé ou soit morte, ne reçoit que les branches firées et trouve leur code sur la branche du
+  Run. La barre d'outils n'a plus de bouton Merge.
+- Un YAML qui contient encore `type: merge` se charge : le nœud devient un `agent` isolé, avec le
+  warning ordinaire « unknown node type », et garde ses ports `branches` / `merged`. Ni alias, ni
+  règle `pdo migrate`.
+- Seul écart de comportement : un nœud de convergence dont toutes les branches sont mortes est
+  désormais sauté (l'ancien Merge était exclu de l'auto-skip).
+- Le résolveur de merge automatique, mort en production depuis ADR-0006, est supprimé (prompt
+  `merge-resolver`, refus `merge_resolution_failed` / `merge_resolver_*`, lint « fan-out sans
+  Merge », conseil Merge de l'importeur). Les événements `MergeResolver*` des anciens Runs restent
+  lisibles : ces Runs se rouvrent, se chiffrent et gardent leur ligne Infrastructure dans Stats.
+- Un conflit de merge-back met le nœud en Interrupted ; sa bannière dit désormais « Merge-back
+  conflict » au lieu de « Session died ».
+- Canvas : une arête auto qui sort à droite vers une cible située en arrière (typiquement la
+  sortie sans `side` d'un ancien Merge, au-dessus de son End) ne traverse plus sa carte source.
+  Elle part par une patte du côté de sortie et contourne la carte.
+
 ## 1.112.1
 **Modales bornées à la hauteur de la fenêtre** (#940, spec #939, story Notion PDO-8).
 

@@ -449,6 +449,23 @@ function nodeSessionEnded(status: NodeStatus, isArchived?: boolean): boolean {
   );
 }
 
+// The prefix the daemon puts on a merge-back conflict's interruption reason
+// (`merge_conflict: <detail>`, #601).
+const MERGE_CONFLICT_PREFIX = "merge_conflict: ";
+
+/**
+ * The Interrupted banner's sentence. A merge-back conflict is not a dead session:
+ * since ADR-0079 no resolver takes it over, so the node parks here with its work
+ * in its sub-worktree, and « Session died » sent the reader looking for a crash.
+ */
+function interruptedBannerText(reason: string | null | undefined): string {
+  if (reason?.startsWith(MERGE_CONFLICT_PREFIX)) {
+    const detail = reason.slice(MERGE_CONFLICT_PREFIX.length);
+    return `Merge-back conflict — ${detail} — the work is kept in the node's worktree`;
+  }
+  return `Session died${reason ? ` — ${reason}` : ""} — the work is presumed intact`;
+}
+
 interface ModalState {
   portName: string;
   files: FileInfo[];
@@ -869,8 +886,7 @@ export default function NodeDetailPanel({
             className="flex-1 text-st-interrupted"
             style={{ fontSize: "11.5px", fontWeight: 500 }}
           >
-            Session died{node.failure_reason ? ` — ${node.failure_reason}` : ""} — the
-            work is presumed intact
+            {interruptedBannerText(node.failure_reason)}
           </span>
           {!isArchived && (
             <button
