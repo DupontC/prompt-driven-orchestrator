@@ -1,7 +1,7 @@
 import { test, expect } from "@playwright/test";
 import * as fs from "node:fs/promises";
+import * as os from "node:os";
 import * as path from "node:path";
-import { fileURLToPath } from "node:url";
 import { openPipelineForEdit, runMultipart, E2E_TARGET_REPO } from "./helpers";
 import type { Page } from "@playwright/test";
 
@@ -28,11 +28,14 @@ async function dismissConflictIfPresent(page: Page): Promise<void> {
 //    runs of the same pipeline; reselecting the already-active run is a no-op.
 // 7. Selecting a Trigger closes the info panel and surfaces the Trigger detail
 //    from behind it (#385 — info outranks trigger in rightPaneOwner until closed).
+// 8. Pipeline info is the only surface of a template's metadata (#948): edited
+//    through `i`, reflected in the YAML tab, written by Save; read-only on a Run;
+//    an empty canvas selection shows no pipeline settings on the right.
 
-const __dirname = path.dirname(fileURLToPath(import.meta.url));
-const WORKSPACE_ROOT = path.resolve(__dirname, "..", "..");
 const PIPELINE_NAME = `e2e-info-panel-${process.pid}-${Date.now()}`;
-const PIPELINE_DIR = path.join(WORKSPACE_ROOT, ".pdo", "pipelines");
+// Instance pipelines live under `$HOME/.pdo/pipelines` — the daemon's instance
+// root — not under the workspace's `.pdo/` (the Run's blackboard).
+const PIPELINE_DIR = path.join(os.homedir(), ".pdo", "pipelines");
 const PIPELINE_PATH = path.join(PIPELINE_DIR, `${PIPELINE_NAME}.yaml`);
 
 // Post-refonte the parser requires exactly one start node (zero inputs, one
@@ -125,16 +128,24 @@ test("clicking toolbar info opens pipeline info panel with metadata", async ({
 
   // Assert variables section is present
   await expect(page.getByTestId("info-panel-variables")).toBeVisible();
+  await expect(page.getByTestId("info-panel-variables")).toContainText("max_iter");
 
-  // The manager terminal lives under the Manager tab (post-refonte: the info
-  // panel is tabbed Info | Manager | YAML; Info is the default). Switch to it.
+  // #948: on a Run the metadata is read-only — shown, never editable.
+  const meta = page.getByTestId("pipeline-meta");
+  await expect(meta).toHaveAttribute("data-readonly", "true");
+  await expect(page.getByTestId("pipeline-meta-version")).toContainText("1.0");
+  await expect(page.getByTestId("pipeline-meta-prompt-required")).toContainText("Yes");
+  await expect(page.getByTestId("pipeline-meta-grid-size")).toBeVisible();
+  await expect(meta.locator("input, select")).toHaveCount(0);
+  await expect(infoPanel).not.toContainText("Description");
+
+  // The Manager lives under its own tab (Info | Diff | Repositories | Manager |
+  // YAML; Info is the default). Manager on demand: a Run starts managerless, so
+  // the tab shows its empty state with a Start button, not a terminal.
   const managerTab = page.getByTestId("info-tab-manager");
   await expect(managerTab).toBeVisible({ timeout: 3_000 });
   await managerTab.click();
-
-  // Assert the manager terminal is rendered (run is active)
-  const terminal = infoPanel.getByTestId("tmux-terminal");
-  await expect(terminal).toBeVisible({ timeout: 5_000 });
+  await expect(infoPanel.getByTestId("manager-empty-state")).toBeVisible({ timeout: 5_000 });
 
   // Close the panel
   await page.getByTestId("info-panel-close").click();
@@ -233,6 +244,73 @@ test("YAML tab shows serialized pipeline and updates on mutation (#69)", async (
   await expect(infoPanel).toBeVisible({ timeout: 3_000 });
   await yamlTab.click();
   await expect(yamlView).toContainText("implementer", { timeout: 3_000 });
+});
+
+test("template metadata is edited through Pipeline info, shown in YAML and saved (#948)", async ({
+  page,
+}) => {
+  await page.goto("/");
+  await expect(page.getByText("Daemon: connected")).toBeVisible({
+    timeout: 10_000,
+  });
+
+  await openPipelineForEdit(page, PIPELINE_NAME);
+  const tabTitle = page.getByTestId(`tab-title-${PIPELINE_NAME}`);
+  await expect(tabTitle).toBeVisible();
+
+  // An empty selection on a template shows no pipeline settings on the right:
+  // the standalone Pipeline Inspector is gone, `i` is the only way in.
+  await expect(page.getByTestId("pipeline-meta")).toHaveCount(0);
+  await expect(page.getByText("Pipeline Inspector")).toHaveCount(0);
+
+  await dismissConflictIfPresent(page);
+  await page.getByTestId("toolbar-info").click();
+  const infoPanel = page.getByTestId("pipeline-info-panel");
+  await expect(infoPanel).toBeVisible({ timeout: 3_000 });
+  await expect(page.getByTestId("pipeline-meta")).toHaveAttribute("data-readonly", "false");
+  await expect(infoPanel).not.toContainText("Description");
+
+  // Edit version, Prompt required, a new variable and the grid size.
+  await page.getByTestId("pipeline-version-input").fill("2.5");
+  const promptRequired = page.getByTestId("prompt-required-checkbox");
+  await expect(promptRequired).toBeChecked();
+  await promptRequired.uncheck();
+  await page.getByTestId("pipeline-variable-add").click();
+  await expect(page.getByTestId("pipeline-variable-row")).toHaveCount(2);
+  // Name it by typing, key by key: the row keeps its input (and focus) and its
+  // place in the list while the name changes under it.
+  const newVarName = page.getByTestId("pipeline-variable-row").nth(1).getByTestId("pipeline-variable-name");
+  await newVarName.click();
+  await newVarName.press("ControlOrMeta+a");
+  await newVarName.pressSequentially("target_env");
+  await expect(newVarName).toHaveValue("target_env");
+  await expect(newVarName).toBeFocused();
+  await page.getByTestId("pipeline-grid-size-S").click();
+
+  // Every edit marks the tab dirty…
+  await expect(tabTitle).toHaveText(`• ${PIPELINE_NAME}.yaml`);
+
+  // …and shows in the YAML tab.
+  await page.getByTestId("info-tab-yaml").click();
+  const yamlView = page.getByTestId("info-yaml-content");
+  await expect(yamlView).toContainText("prompt_required: false", { timeout: 3_000 });
+  await expect(yamlView).toContainText("grid_size: S");
+  await expect(yamlView).toContainText("target_env");
+  await expect(yamlView).toContainText("2.5");
+
+  // Save writes it to the pipeline file.
+  await page.getByTestId("save-button").click();
+  await expect(tabTitle).toHaveText(`${PIPELINE_NAME}.yaml`, { timeout: 3_000 });
+  await expect
+    .poll(async () => fs.readFile(PIPELINE_PATH, "utf8"), { timeout: 3_000 })
+    .toContain("prompt_required: false");
+  const saved = await fs.readFile(PIPELINE_PATH, "utf8");
+  expect(saved).toContain("grid_size: S");
+  expect(saved).toContain("target_env");
+  expect(saved).toMatch(/version: ["']?2\.5/);
+
+  // Restore the seed so the other cases keep a prompt-required pipeline.
+  await fs.writeFile(PIPELINE_PATH, SEED_YAML);
 });
 
 test("library tab after a run: panel shows template, not the previous run", async ({
