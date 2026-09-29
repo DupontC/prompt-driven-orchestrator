@@ -89,7 +89,7 @@ export default function AgentProfileModal({
       }}
     >
       <div
-        className="flex max-h-[85vh] w-[440px] max-w-[90vw] flex-col rounded-lg border border-line bg-bg-4 p-4"
+        className="flex max-h-[85vh] w-[440px] max-w-[90vw] flex-col rounded-lg border border-line bg-bg-4"
         style={{ fontSize: "12px" }}
         role="dialog"
         aria-modal="true"
@@ -97,11 +97,12 @@ export default function AgentProfileModal({
         data-testid="agent-profile-modal"
         onClick={(event) => event.stopPropagation()}
       >
-        {/* #940: bounded to the window like New Run — only the fields scroll. */}
-        <div className="mb-3 shrink-0 font-medium text-fg">
+        {/* #940: bounded to the window like New Run — only the fields scroll; the
+            borders mark where the scrolling body is cut off. */}
+        <div className="shrink-0 border-b border-line px-4 py-3 font-medium text-fg">
           {profile ? "Edit agent profile" : "New agent profile"}
         </div>
-        <div className="min-h-0 space-y-2 overflow-y-auto" data-testid="agent-profile-body">
+        <div className="min-h-0 space-y-2 overflow-y-auto px-4 py-3" data-testid="agent-profile-body">
         <label className="block text-fg-3" style={{ fontSize: 10 }}>
           Name
           <input
@@ -149,9 +150,9 @@ export default function AgentProfileModal({
           </>
         )}
         </div>
-        <div className="shrink-0">
-        {error && <p className="mt-2 text-st-failed" style={{ fontSize: 10 }}>{error}</p>}
-        <div className="flex justify-end gap-2 pt-4">
+        <div className="shrink-0 border-t border-line px-4 py-3">
+        {error && <p className="mb-2 text-st-failed" style={{ fontSize: 10 }}>{error}</p>}
+        <div className="flex justify-end gap-2">
           <button
             type="button"
             onClick={onClose}
