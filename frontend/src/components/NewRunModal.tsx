@@ -162,6 +162,13 @@ export default function NewRunModal({ open, onClose, onCreated, openIntent = RUN
     EMPTY_PROVISIONING_RULES,
   );
   const [provisioningValid, setProvisioningValid] = useState(true);
+  // Notion #7: why provisioning blocks Launch, shown on the disabled button —
+  // the (collapsible) block may be scrolled out of view.
+  const [provisioningBlockReason, setProvisioningBlockReason] = useState<string | undefined>();
+  const handleProvisioningValidity = useCallback((valid: boolean, reason?: string) => {
+    setProvisioningValid(valid);
+    setProvisioningBlockReason(valid ? undefined : reason);
+  }, []);
 
   // #465 (ADR-0042): read-only secondary repos. The primary stays `targetRepo` /
   // `sourceBranch` (from the hooks above, row 0), untouched — these are the extra
@@ -272,6 +279,7 @@ export default function NewRunModal({ open, onClose, onCreated, openIntent = RUN
     setError(null);
     setProvisioning(EMPTY_PROVISIONING_RULES);
     setProvisioningValid(true);
+    setProvisioningBlockReason(undefined);
 
     // One-shot reset: the `openPrefillDone` ref gates this to a single run per
     // open, so the setState cascade is bounded and does not re-fire. The
@@ -1842,7 +1850,7 @@ export default function NewRunModal({ open, onClose, onCreated, openIntent = RUN
                 repository={targetRepo}
                 rules={provisioning}
                 onChange={setProvisioning}
-                onValidityChange={setProvisioningValid}
+                onValidityChange={handleProvisioningValidity}
                 gitRef={sourceBranch || "HEAD"}
               />
             </div>
@@ -1892,6 +1900,7 @@ export default function NewRunModal({ open, onClose, onCreated, openIntent = RUN
             <button
               onClick={handleLaunch}
               disabled={submitting || !canLaunch}
+              title={!provisioningValid ? provisioningBlockReason : undefined}
               className="flex items-center gap-1.5 rounded-md bg-acc px-3 py-1.5 font-medium text-on-acc transition-colors hover:bg-acc-dim disabled:opacity-40"
               style={{ fontSize: "11.5px" }}
               data-testid="launch-button"

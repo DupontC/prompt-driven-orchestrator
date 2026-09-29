@@ -10,6 +10,22 @@ ascendante** : la casse se signale ici et par un bump majeur, jamais en gardant 
 morts. Seule contrainte non négociable — les **données historiques restent lisibles** : un Run
 archivé s'ouvre et se chiffre quelle que soit la version qui a écrit son payload.
 
+## 1.111.0
+**Provisioning replié par défaut, expliqué et diagnosticable** (#951, spec #950, story Notion
+PDO Dojo n° 7, contrat ADR-0061 inchangé).
+
+- Le bloc Provisioning est un disclosure replié à l'ouverture de New Run, de l'édition de
+  Projet, de l'inspecteur de node isolé et du détail de node ; Settings › Sandbox & worktrees le
+  garde déplié. Aucun état ouvert/fermé n'est mémorisé.
+- Replié, l'en-tête résume `Provisioning · N inherited · M at this level` (ou `· none`) et un
+  sous-titre explique à quoi sert le provisioning. L'aperçu tourne même replié.
+- Infobulles (Radix, atteignables au clavier) sur Copy, Hardlink, Symlink et sur la bande de
+  niveaux (héritage Instance → Project → Run → Node).
+- Un conflit de modes ou une erreur d'aperçu ouvre le bloc tout seul ; dans New Run, le bouton
+  Launch grisé en donne la raison au survol (« Provisioning has a mode conflict »).
+- Disparition du bouton « Configure worktree provisioning… » (Projet) et de la bascule
+  « Configure / Hide provisioning » (inspecteur) ; « Resolve against » vit dans le corps déplié.
+
 ## 1.110.0
 **Onboarding : tour *Overview*** (#911, spec #910, story #909, ADR-0071 §4).
 
