@@ -10,6 +10,15 @@ ascendante** : la casse se signale ici et par un bump majeur, jamais en gardant 
 morts. Seule contrainte non négociable — les **données historiques restent lisibles** : un Run
 archivé s'ouvre et se chiffre quelle que soit la version qui a écrit son payload.
 
+## 1.110.1
+**Coquille : le panneau secondaire se ferme par ✕, Échap ou bascule** (#944, spec #943, story Notion #4).
+
+- Stats › Cost › *Pricing details* s'ouvre sous le header, qui reste accessible, dans le même
+  cadre que la Banque de skills : bouton ✕ et indication « Esc returns to Stats ».
+- Le panneau se ferme par ✕, par Échap (un second Échap ferme Stats) ou en recliquant sur
+  *Pricing details*, dont le style reflète l'état ouvert. Le focus revient au déclencheur.
+- La Banque de skills (Settings › Skills) partage ce comportement.
+
 ## 1.110.0
 **Onboarding : tour *Overview*** (#911, spec #910, story #909, ADR-0071 §4).
 
