@@ -1,7 +1,7 @@
 import { test, expect } from "@playwright/test";
 import * as fs from "node:fs/promises";
+import * as os from "node:os";
 import * as path from "node:path";
-import { fileURLToPath } from "node:url";
 
 // Layer 3b — resizable panels (testing pyramid per ADR 0004).
 // Verifies that dragging a divider persists to localStorage and survives reload.
@@ -12,10 +12,10 @@ import { fileURLToPath } from "node:url";
 // pencil "Toggle edit mode" with a separate `pdo.layout.edit` key — opening a
 // pipeline into the canvas reuses the same panel group and the same layout key.
 
-const __dirname = path.dirname(fileURLToPath(import.meta.url));
-const WORKSPACE_ROOT = path.resolve(__dirname, "..", "..");
 const PIPELINE_NAME = `e2e-resizable-${process.pid}-${Date.now()}`;
-const PIPELINE_DIR = path.join(WORKSPACE_ROOT, ".pdo", "pipelines");
+// Instance pipelines live under `$HOME/.pdo/pipelines` — the daemon's instance
+// root, which the Pipelines tab lists — not under the workspace's `.pdo/`.
+const PIPELINE_DIR = path.join(os.homedir(), ".pdo", "pipelines");
 const PIPELINE_PATH = path.join(PIPELINE_DIR, `${PIPELINE_NAME}.yaml`);
 
 // A valid pipeline the strict parser (get_pipeline) accepts: every node needs a
@@ -154,7 +154,7 @@ test("layout is unified across the run placeholder and the edit canvas", async (
   ).toBeNull();
 
   // Open a pipeline into the edit canvas; the same panel group stays mounted.
-  await page.getByRole("tab", { name: "Library" }).click();
+  await page.getByTestId("left-tab-library").click();
   const entry = page.getByText(PIPELINE_NAME).first();
   await expect(entry).toBeVisible({ timeout: 10_000 });
   await entry.click();
