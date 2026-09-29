@@ -874,11 +874,6 @@ pub fn ws_text(msg: &Message) -> Option<&str> {
 // value back and still releases the lock — a manual `remove_var` at the end of
 // the test body does neither.
 
-/// Serialises `PDO_SESSION_CAP` between `session_cap_admission.rs` and
-/// `admission_concurrency.rs` — both set it, to different values, and both
-/// assert on the cap they set.
-static SESSION_CAP_LOCK: Mutex<()> = Mutex::new(());
-
 /// Serialises `PDO_GUARD_TIMEOUT_MS` between `guard_dry_run_timeout.rs` and
 /// `trigger_scheduler.rs`.
 static GUARD_TIMEOUT_LOCK: Mutex<()> = Mutex::new(());
@@ -927,15 +922,20 @@ impl Drop for EnvVarGuard {
     }
 }
 
-/// Set `PDO_SESSION_CAP` for the lifetime of the returned guard, excluding any
-/// other test that also wants it.
-#[must_use = "the cap is restored as soon as the guard is dropped"]
-pub fn lock_session_cap(value: impl AsRef<str>) -> EnvVarGuard {
-    EnvVarGuard::acquire(
-        &SESSION_CAP_LOCK,
-        pdo_daemon::admission::SESSION_CAP_ENV,
-        value.as_ref(),
-    )
+/// Cap `daemon`'s concurrent NodeRun sessions through the **stored** tier
+/// (`PUT /settings`), never `PDO_SESSION_CAP`: that env var is process-global, so
+/// a low cap set by one test throttled every sibling test that needs several
+/// sessions at once (a parent, its child and its grandchild never all got a
+/// slot). Stored beats env, so this is also hermetic under a runner that exports
+/// one — PDO does, in every node session.
+pub async fn set_stored_session_cap(daemon: &TestDaemon, cap: u32) {
+    let resp = reqwest::Client::new()
+        .put(format!("{}/settings", daemon.url()))
+        .json(&serde_json::json!({ "session_cap": cap }))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), 200, "PUT /settings session_cap={cap}");
 }
 
 /// Set `PDO_GUARD_TIMEOUT_MS` for the lifetime of the returned guard, excluding
