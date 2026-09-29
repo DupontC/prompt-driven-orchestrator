@@ -1048,6 +1048,10 @@ function EditCanvasInner({ libraryEntries, onLibraryDelete, infoOpen, onToggleIn
           // #315: drag + connect are off on an archived run; click-to-select stays on.
           nodesDraggable={!readOnly}
           nodesConnectable={!readOnly}
+          // #936: an edge is born from a DRAG only. xyflow's click-to-connect (on
+          // by default) wired "click a rim, then click another node" by accident;
+          // a click on a rim now just bubbles up to `onNodeClick` and selects.
+          connectOnClick={false}
         >
           {/* Decorative background — pure chrome, but drawn at the wiring grid's
               pitch (#877) so a 30px step does not fall out of phase with it. */}
