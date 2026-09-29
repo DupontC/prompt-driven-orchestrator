@@ -10,6 +10,23 @@ ascendante** : la casse se signale ici et par un bump majeur, jamais en gardant 
 morts. Seule contrainte non négociable — les **données historiques restent lisibles** : un Run
 archivé s'ouvre et se chiffre quelle que soit la version qui a écrit son payload.
 
+## 1.112.0
+**Le panneau de droite se replie quand il n'a rien à montrer** (#949, spec #947, story Notion #6).
+
+- Template sans sélection, écran d'accueil, fermeture de Pipeline info (✕ ou bouton (i) de la barre d'outils) sans
+  sélection : le panneau de droite se replie et le canvas prend toute la largeur.
+- Il se déplie, sans animation, à la dernière largeur choisie dès qu'un contenu le réclame :
+  sélection de nœud, d'edge, de région ou de note, Pipeline info, Assistant, Trigger. La
+  largeur choisie survit au rechargement ; le repli ne l'écrase jamais.
+- Pas de repli manuel : la poignée disparaît pendant le repli, et on ne peut pas réduire le
+  panneau sous sa taille minimale en le glissant.
+- Un Run à sélection vide garde son panneau Run ; un Run archivé garde « Run archived ».
+- Le canvas se recadre au dépliage comme au repli : il garde son centre visuel, et le nœud
+  sélectionné reste entièrement visible au lieu de glisser sous le panneau. Au dépliage, le
+  décalage s'arrête là où le bord gauche du graphe rejoint celui du canvas : un graphe déplacé
+  vers la gauche ne passe pas sous la barre latérale. Un glissement de la poignée ou un
+  redimensionnement de la fenêtre ne recadre pas.
+
 ## 1.111.0
 **Pipeline info, seule surface des métadonnées d'un pipeline** (#948, spec #947, story Notion #6).
 
