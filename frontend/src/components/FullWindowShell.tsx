@@ -1,4 +1,4 @@
-import { useEffect, type ReactNode } from "react";
+import { useEffect, useRef, type ReactNode } from "react";
 import { X } from "lucide-react";
 
 export interface RailItem {
@@ -17,7 +17,8 @@ export interface RailItem {
  * The **panneau secondaire** (CONTEXT.md, #943): a panel the host describes and the shell
  * frames. It opens under the header — the title, the host's header actions and the ✕ stay
  * visible and clickable — and carries its own title, Escape hint and ✕. A click outside it
- * does not close it; Escape still goes through the host's `onEscape`.
+ * does not close it; Escape still goes through the host's `onEscape`. Once it closes, focus
+ * returns to what opened it (the trigger) rather than falling to `<body>`.
  */
 export interface ShellDrawer {
   title: string;
@@ -187,8 +188,26 @@ export default function FullWindowShell({
 
 /** The frame of the secondary panel: under the header, title + actions + Escape hint + ✕. */
 function SecondaryPanel({ drawer }: { drawer: ShellDrawer }) {
+  const panelRef = useRef<HTMLElement>(null);
+  // Focus return (#944): the element focused when the panel mounted is its opener (the
+  // trigger clicked or activated from the keyboard). When the panel goes — ✕, Escape or the
+  // toggle — focus goes back to it, unless the user has already moved it elsewhere or the
+  // opener is gone (tab change, programmatic entry from another surface).
+  useEffect(() => {
+    const panel = panelRef.current;
+    const opener = document.activeElement;
+    return () => {
+      if (!(opener instanceof HTMLElement) || !opener.isConnected) return;
+      if (panel?.contains(opener)) return;
+      const active = document.activeElement;
+      if (active && active !== document.body && !panel?.contains(active)) return;
+      opener.focus();
+    };
+  }, []);
+
   return (
     <aside
+      ref={panelRef}
       className={`absolute bottom-0 right-0 top-14 z-20 flex flex-col border-l border-line bg-bg-4 shadow-2xl ${drawer.widthClassName}`}
       aria-label={drawer.title}
       data-testid={drawer.testId}

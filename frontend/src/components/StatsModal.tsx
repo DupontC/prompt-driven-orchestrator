@@ -388,13 +388,18 @@ function StatsSurface({
             Refresh
           </button>
           {tab === "cost" && (
-            // A toggle (#944): reclicking it, the panel open, closes it.
+            // A toggle (#944): reclicking it, the panel open, closes it. Open, it takes the
+            // active look of the period presets so the toggle reads as one.
             <button
               type="button"
               onClick={() => setPricingOpen((value) => !value)}
               aria-expanded={pricingOpen}
               data-testid="stats-pricing-trigger"
-              className="rounded border border-line bg-bg-3 px-2 py-1 text-fg-2"
+              className={`rounded border px-2 py-1 ${
+                pricingOpen
+                  ? "border-acc bg-acc/15 text-fg"
+                  : "border-line bg-bg-3 text-fg-2"
+              }`}
             >
               Pricing details
               {cost && cost.total.unpriced_models.length + cost.total.missing_reasons.length > 0

@@ -1,4 +1,5 @@
 import { fireEvent, render, screen, within } from "@testing-library/react";
+import { useState } from "react";
 import { describe, expect, it, vi } from "vitest";
 import FullWindowShell, { type ShellDrawer } from "./FullWindowShell";
 
@@ -82,5 +83,62 @@ describe("FullWindowShell — secondary panel frame (#944)", () => {
     expect(onClose).not.toHaveBeenCalled();
     fireEvent.keyDown(window, { key: "Escape" });
     expect(onEscape).toHaveBeenCalledTimes(1);
+  });
+
+  describe("focus return", () => {
+    function Harness() {
+      const [open, setOpen] = useState(false);
+      return (
+        <FullWindowShell
+          title="Surface"
+          testId="surface"
+          rail={[{ id: "a", label: "A" }]}
+          activeRail="a"
+          onRailChange={() => {}}
+          railAriaLabel="Sections"
+          railTestIdPrefix="surface-tab"
+          onEscape={() => setOpen(false)}
+          onClose={() => {}}
+          closeLabel="Close surface"
+          headerActions={
+            <button type="button" data-testid="opener" onClick={() => setOpen((v) => !v)}>
+              Open
+            </button>
+          }
+          drawer={open ? panel({ onClose: () => setOpen(false) }) : null}
+        >
+          <button type="button" data-testid="elsewhere">
+            Elsewhere
+          </button>
+        </FullWindowShell>
+      );
+    }
+
+    it("gives focus back to the opener when the panel closes on its ✕ or Escape", () => {
+      render(<Harness />);
+      const opener = screen.getByTestId("opener");
+      opener.focus();
+      fireEvent.click(opener);
+      screen.getByTestId("surface-panel-close").focus();
+      fireEvent.click(screen.getByTestId("surface-panel-close"));
+      expect(screen.queryByTestId("surface-panel")).not.toBeInTheDocument();
+      expect(opener).toHaveFocus();
+
+      fireEvent.click(opener);
+      (document.activeElement as HTMLElement).blur();
+      fireEvent.keyDown(window, { key: "Escape" });
+      expect(opener).toHaveFocus();
+    });
+
+    it("leaves focus alone when the user moved it elsewhere", () => {
+      render(<Harness />);
+      const opener = screen.getByTestId("opener");
+      opener.focus();
+      fireEvent.click(opener);
+      screen.getByTestId("elsewhere").focus();
+      fireEvent.keyDown(window, { key: "Escape" });
+      expect(screen.queryByTestId("surface-panel")).not.toBeInTheDocument();
+      expect(screen.getByTestId("elsewhere")).toHaveFocus();
+    });
   });
 });

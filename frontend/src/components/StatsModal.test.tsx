@@ -774,6 +774,35 @@ describe("StatsModal — Pricing details in the shell's secondary panel (#944)",
     expect(screen.getByTestId("stats-pricing-trigger")).toHaveAttribute("aria-expanded", "false");
   });
 
+  it("shows the trigger's open state, not only aria-expanded", async () => {
+    const { user } = await openPricing();
+    const trigger = screen.getByTestId("stats-pricing-trigger");
+    expect(trigger).toHaveClass("border-acc", "bg-acc/15");
+
+    await user.click(trigger);
+    expect(trigger).not.toHaveClass("border-acc");
+    expect(trigger).toHaveClass("border-line", "bg-bg-3");
+  });
+
+  it("returns focus to the trigger on ✕, Escape and the toggle", async () => {
+    const { user } = await openPricing();
+    const trigger = screen.getByTestId("stats-pricing-trigger");
+
+    await user.click(screen.getByTestId("stats-pricing-details-close"));
+    expect(trigger).toHaveFocus();
+
+    await user.keyboard("{Enter}");
+    expect(screen.getByTestId("stats-pricing-details")).toBeInTheDocument();
+    await user.keyboard("{Escape}");
+    expect(screen.queryByTestId("stats-pricing-details")).not.toBeInTheDocument();
+    expect(trigger).toHaveFocus();
+
+    await user.click(trigger);
+    await user.click(trigger);
+    expect(screen.queryByTestId("stats-pricing-details")).not.toBeInTheDocument();
+    expect(trigger).toHaveFocus();
+  });
+
   it("closes the programmatic entry (Settings › Diagnostics) on its ✕ too", async () => {
     const user = userEvent.setup();
     render(<StatsModal open onClose={() => {}} initialTab="cost" initialPricingOpen />);

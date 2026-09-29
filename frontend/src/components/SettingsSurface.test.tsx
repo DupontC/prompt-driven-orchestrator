@@ -2485,6 +2485,22 @@ describe("SettingsSurface — full-window shell, categories, sections (#690)", (
     expect(onClose).toHaveBeenCalledTimes(1);
   });
 
+  it("returns focus to « Open skill bank » when the bank closes on its ✕ (#944)", async () => {
+    render(<SettingsSurface open onClose={() => {}} />);
+    await screen.findByTestId("setting-session-cap");
+    fireEvent.click(screen.getByTestId("settings-category-agents"));
+    const opener = screen.getByTestId("setting-open-skill-bank");
+    opener.focus();
+    fireEvent.click(opener);
+    const close = screen.getByTestId("settings-drawer-close");
+    close.focus();
+    fireEvent.click(close);
+    await waitFor(() =>
+      expect(screen.queryByTestId("settings-drawer")).not.toBeInTheDocument(),
+    );
+    expect(screen.getByTestId("setting-open-skill-bank")).toHaveFocus();
+  });
+
   it("frames the skill bank in the shell's secondary panel, same place, ✕ and Escape order (#944)", async () => {
     const onClose = vi.fn();
     render(<SettingsSurface open onClose={onClose} />);
