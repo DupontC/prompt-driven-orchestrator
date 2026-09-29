@@ -33,7 +33,6 @@ import type { TabId } from "./components/PipelineInfoPanel";
 import EditCanvas from "./components/EditCanvas";
 import TabBar from "./components/TabBar";
 import NodeInspector from "./components/NodeInspector";
-import MergeInspector from "./components/MergeInspector";
 import PipelineInspector from "./components/PipelineInspector";
 import PipelineInfoPanel from "./components/PipelineInfoPanel";
 import StartInspector from "./components/StartInspector";
@@ -554,7 +553,6 @@ export default function App() {
 
   function inspectorEditPane() {
     switch (editNodeType) {
-      case "merge": return <MergeInspector />;
       // #248: `script` reuses NodeInspector, which shows the Script (bash) editor
       // and hides the model field for it.
       // Without this case a script node would fall through and — before the

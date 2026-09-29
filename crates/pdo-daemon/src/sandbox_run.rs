@@ -455,7 +455,7 @@ pub(crate) async fn merge_back_best_effort(state: &AppState, run_id: &str) {
 
 /// Fill `harness`'s staging set into a sandboxed Run's staging **once per Run**,
 /// and return the env the session's `docker exec` must carry (#708, ADR-0063 §3).
-/// The AppState-side entry point for the infra sessions (manager, merge resolver,
+/// The AppState-side entry point for the infra sessions (manager,
 /// reattach); `spawn_node` calls the pure [`sandbox_staging::fill_staging_set`]
 /// with the roots it already holds. A no-op (empty env) for `off`, and for a harness
 /// with no set — whose absence is said once by the caller. Hard error when the set

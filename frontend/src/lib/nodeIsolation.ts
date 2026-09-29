@@ -13,14 +13,12 @@ import type { NodeDef, NodeType } from "../types";
 
 /**
  * The isolation a type carries when the document says nothing. `null` means the
- * type carries no isolation at all: `merge` is isolated by construction (it
- * exposes no control — a Merge that could share a tree would have nothing to
- * merge), and structural nodes never run in a worktree of their own.
+ * type carries no isolation at all: structural nodes never run in a worktree of
+ * their own.
  */
 const DEFAULT_ISOLATION: Record<NodeType, boolean | null> = {
   agent: true,
   script: false,
-  merge: null,
   start: null,
   end: null,
 };
@@ -84,12 +82,9 @@ export function nodeIsolation(node: NodeDef): boolean | null {
 
 /**
  * Whether a node's NodeRun forks a worktree of its own — the canvas marker's
- * predicate. Unlike [`nodeIsolation`] this answers for `merge` too, which is
- * isolated without a line to read: the marker has to say so, or a Merge would
- * look *less* isolated than the Agent feeding it.
+ * predicate. A type that carries no isolation reads `false`.
  */
 export function isNodeIsolated(node: NodeDef): boolean {
-  if (node.type === "merge") return true;
   return nodeIsolation(node) === true;
 }
 

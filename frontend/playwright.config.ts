@@ -26,6 +26,19 @@ export default defineConfig({
   use: {
     baseURL: `http://${HOST}:${PORT}`,
     trace: "retain-on-failure",
+    // The onboarding welcome modal (#823) covers the whole app on a fresh
+    // browser and intercepts every click. Specs start as a reader who already
+    // answered it (`lib/tourMemory.ts`); a spec about the welcome itself would
+    // clear this key.
+    storageState: {
+      cookies: [],
+      origins: [
+        {
+          origin: `http://${HOST}:${PORT}`,
+          localStorage: [{ name: "pdo.tour.offered", value: "1" }],
+        },
+      ],
+    },
   },
   projects: [
     {

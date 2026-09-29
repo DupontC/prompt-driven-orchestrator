@@ -39,7 +39,6 @@ import { NodeTypeIcon, IsolationMarker } from "./NodeTypeIcon";
 import { NodeCard } from "./NodeCard";
 import { LoopRegionNode } from "./LoopRegionNode";
 import { NoteNode } from "./NoteNode";
-import { MergeEditNode } from "./MergeNode";
 import OrthogonalEdge from "./OrthogonalEdge";
 import EditToolbar from "./EditToolbar";
 import ExportNodeYamlModal from "./ExportNodeYamlModal";
@@ -305,12 +304,11 @@ export function EditNode({ data, id, selected }: NodeProps<Node<EditNodeData>>) 
   );
 }
 
-const nodeTypes = { edit: EditNode, merge: MergeEditNode, loopRegion: LoopRegionNode, note: NoteNode };
+const nodeTypes = { edit: EditNode, loopRegion: LoopRegionNode, note: NoteNode };
 const edgeTypes = { orthogonal: OrthogonalEdge };
 
 const DEFAULT_NODE_NAMES: Partial<Record<NodeType, string>> = {
   "agent": "implementer",
-  "merge": "merge",
   "script": "script",
 };
 
@@ -567,9 +565,9 @@ function EditCanvasInner({ libraryEntries, onLibraryDelete, infoOpen, onToggleIn
         sourceNode?.outputs[0]?.name ??
         "out";
       // Inputs are emergent (#149): dropping on a node's body creates an input
-      // named after the SOURCE document. Structural nodes (merge) still expose
-      // declared target handles, so honour an explicit `targetHandle`; otherwise
-      // the emergent name is inherited from the source.
+      // named after the SOURCE document. A declared target handle is honoured
+      // when one is named; otherwise the emergent name is inherited from the
+      // source.
       // The body anchor handles (#168) are LAYOUT, not semantic ports — ignore
       // them here so the emergent input name still comes from the source.
       const declaredHandle = anchorsByDropOnBody(connection.targetHandle)
@@ -743,8 +741,8 @@ function EditCanvasInner({ libraryEntries, onLibraryDelete, infoOpen, onToggleIn
       };
       if (rect.width === 0 || rect.height === 0) return;
 
-      // Structural nodes (merge) keep their declared, fixed-side handle — never
-      // re-anchor those. Work nodes and End (#840) land where dropped. Keyed on
+      // A node with a declared, fixed-side handle is never re-anchored. Work
+      // nodes and End (#840) land where dropped. Keyed on
       // node TYPE: a work node carrying a vestigial declared `in` still anchors
       // (#175).
       const anchorsByDrop = targetDef != null && landsByDrop(targetDef.type);
@@ -909,13 +907,6 @@ function EditCanvasInner({ libraryEntries, onLibraryDelete, infoOpen, onToggleIn
     const view = computeDropPosition();
     let newNode: NodeDef;
     switch (type) {
-      case "merge":
-        newNode = {
-          id, name, type, interactive: false, view,
-          inputs: [{ name: "branches", repeated: true, side: "left" }],
-          outputs: [{ name: "merged", repeated: false, side: "right" }],
-        };
-        break;
       case "script":
         // #248: a script node's inputs are emergent (edge-derived), like a work
         // node — it declares none. One default output for its `output.md`.

@@ -37,7 +37,6 @@ pub(crate) enum NodeType {
     End,
     Switch,
     Loop,
-    Merge,
     /// A node that runs author-written bash deterministically instead of
     /// launching Claude (#248 / ADR-0017). Runs in a tmux session (attachable
     /// like any NodeRun) whose tail is `timeout N bash <body>`: exit 0 ⇒ node
@@ -49,7 +48,7 @@ pub(crate) enum NodeType {
 impl NodeType {
     /// A *regular* node (agent / script) declares no inputs: its inputs are
     /// emergent, derived from incoming edges and named after the edge target
-    /// port (#149 / ADR-0011). Structural nodes (start/end/switch/loop/merge)
+    /// port (#149 / ADR-0011). Structural nodes (start/end/switch/loop)
     /// keep their required, declared input ports. A `script` node consumes whole
     /// artifacts by edge just like a work node, so its inputs are emergent too
     /// (#248).
@@ -59,10 +58,10 @@ impl NodeType {
 
     /// The isolation this type carries when the document says nothing (#653 /
     /// ADR-0060): an `agent` is isolated, a `script` shares the Run worktree,
-    /// and every other type carries no isolation setting at all — `merge` is
-    /// isolated by construction, structural nodes never run in a worktree of
-    /// their own. `None` is what keeps `isolated_worktree` off a Merge/Start/End
-    /// document instead of writing a line nobody may edit.
+    /// and every other type carries no isolation setting at all — structural
+    /// nodes never run in a worktree of their own. `None` is what keeps
+    /// `isolated_worktree` off a Start/End document instead of writing a line
+    /// nobody may edit.
     pub(crate) fn default_isolation(&self) -> Option<bool> {
         match self {
             NodeType::Agent => Some(true),
@@ -79,7 +78,6 @@ impl NodeType {
             NodeType::End => "end",
             NodeType::Switch => "switch",
             NodeType::Loop => "loop",
-            NodeType::Merge => "merge",
             NodeType::Script => "script",
         }
     }
@@ -228,9 +226,8 @@ pub(crate) struct NodeDef {
     /// of its own; `false` ⇒ the Run's shared worktree. Carried only by `agent`
     /// and `script`, where [`normalize_node_value`] fills the type's default
     /// (`agent` isolated, `script` shared) so the parsed document ALWAYS states
-    /// the choice — including when it equals the default. `None` on `merge`
-    /// (isolated by construction) and on structural nodes (no worktree of their
-    /// own). Semantic, not layout: moving a node between worktrees changes what
+    /// the choice — including when it equals the default. `None` on structural
+    /// nodes (no worktree of their own). Semantic, not layout: moving a node between worktrees changes what
     /// the pipeline does, so it enters the diff and the library content hash.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub isolated_worktree: Option<bool>,
@@ -247,8 +244,7 @@ pub(crate) struct NodeDef {
 
 impl NodeDef {
     /// Whether this node's NodeRun gets a sub-worktree of its own (#653,
-    /// ADR-0060). `merge` is isolated by construction and exposes no setting;
-    /// `agent`/`script` read their explicit line, falling back to the type's
+    /// ADR-0060). `agent`/`script` read their explicit line, falling back to the type's
     /// default for a `NodeDef` built in code rather than parsed; every other
     /// type runs in the Run worktree.
     ///
@@ -257,7 +253,6 @@ impl NodeDef {
     /// iteration between worktrees.
     pub(crate) fn is_isolated(&self) -> bool {
         match self.node_type {
-            NodeType::Merge => true,
             NodeType::Agent | NodeType::Script => self
                 .isolated_worktree
                 .or_else(|| self.node_type.default_isolation())
@@ -483,7 +478,7 @@ impl EdgeDef {
     /// Each pair is `(source port, target input name)`.
     ///
     /// A single-port edge keeps `target.port` as the input name — that is what a
-    /// declared handle (a `merge`'s input, End's `result`) and every pre-#843
+    /// declared handle (End's `result`) and every pre-#843
     /// file mean, and renaming it on the way through would break them. As soon as
     /// the edge carries several ports there is no single name left to honour, so
     /// each input takes its own port's name — which is exactly the emergent rule
@@ -722,8 +717,12 @@ const KNOWN_TOP_LEVEL_KEYS: &[&str] = &[
 /// migrator. They now take the same generic path as any other invalid value —
 /// coerced to `agent` with the unknown-type warning — because a bespoke
 /// diagnostic for a retired type is a compatibility branch by another name.
+///
+/// ADR-0079: `merge` is GONE the same way. A legacy `type: merge` becomes an
+/// isolated `agent` with the ordinary warning — its `branches` / `merged` ports
+/// survive untouched, and convergence is the generic rule of every node.
 pub(crate) const VALID_NODE_TYPES: &[&str] = &[
-    "agent", "start", "end", "switch", "loop", "merge",
+    "agent", "start", "end", "switch", "loop",
     // #248: without this, a `type: script` node is silently rewritten to
     // `agent` with only a diagnostic (see the layer-1 test).
     "script",
@@ -739,7 +738,7 @@ pub(crate) const VALID_NODE_TYPES: &[&str] = &[
 ///   coercing a fan-out to `agent` would run each item's work zero times).
 /// - missing `type` → default to `agent` (noisy warning).
 /// - unknown `type` → coerce to `agent` (noisy warning). This is the arm the
-///   retired `doc-only` / `code-mutating` now land in (#653).
+///   retired `doc-only` / `code-mutating` (#653) and `merge` (ADR-0079) land in.
 /// - a known type (incl. legacy `switch`/`loop`) → left untouched, no warning.
 ///
 /// It then stamps the node's isolation default (#653): an `agent`/`script` with
@@ -834,9 +833,9 @@ pub(crate) const SKILLS_KEY: &str = "skills";
 /// This is what makes "the Document always states the choice" true without
 /// asking every author to type the line: an `agent` with no `isolated_worktree`
 /// parses as isolated and *re-serializes* saying so. A type that carries no
-/// isolation (`merge`, `start`, `end`, `switch`, `loop`) has any stray key
-/// dropped rather than round-tripped — a Merge is isolated by construction, and
-/// a line nobody may edit would only invite someone to edit it.
+/// isolation (`start`, `end`, `switch`, `loop`) has any stray key dropped rather
+/// than round-tripped — a line nobody may edit would only invite someone to
+/// edit it.
 ///
 /// Runs after the type normalization above, so it reads the coerced type.
 fn stamp_isolation_default(node_map: &mut serde_yaml::Mapping) {
@@ -995,23 +994,6 @@ pub(crate) fn parse_pipeline(yaml: &str) -> Result<ParseResult, ParseError> {
                         instructions: None,
                         required: false,
                     });
-                }
-            }
-            NodeType::Merge => {
-                if node.inputs.len() != 1
-                    || node.inputs[0].name != "branches"
-                    || !node.inputs[0].repeated
-                {
-                    return Err(ParseError::MissingField(format!(
-                        "merge node '{}' must have exactly one input named 'branches' with repeated: true",
-                        node.id
-                    )));
-                }
-                if node.outputs.len() != 1 || node.outputs[0].name != "merged" {
-                    return Err(ParseError::MissingField(format!(
-                        "merge node '{}' must have exactly one output named 'merged'",
-                        node.id
-                    )));
                 }
             }
             NodeType::Loop => {
@@ -3126,7 +3108,11 @@ nodes:
     }
 
     #[test]
-    fn parses_merge_node() {
+    fn legacy_merge_node_parses_as_an_isolated_agent_with_its_ports() {
+        // ADR-0079: `merge` is retired with no alias and no migrator. It takes
+        // the generic unknown-type path (like `doc-only` / `code-mutating`,
+        // #653): an isolated `agent`, the ordinary warning, ports untouched so
+        // edges and prompts naming `branches` / `merged` keep working.
         let yaml = with_start_end(
             r#"
 name: merge-test
@@ -3148,12 +3134,24 @@ nodes:
             .iter()
             .find(|n| n.id == "ab000001")
             .unwrap();
-        assert_eq!(mg.node_type, NodeType::Merge);
+        assert_eq!(mg.node_type, NodeType::Agent);
+        assert!(mg.is_isolated());
+        assert_eq!(mg.isolated_worktree, Some(true));
         assert_eq!(mg.inputs.len(), 1);
         assert_eq!(mg.inputs[0].name, "branches");
         assert!(mg.inputs[0].repeated);
         assert_eq!(mg.outputs.len(), 1);
         assert_eq!(mg.outputs[0].name, "merged");
+        assert!(
+            result
+                .diagnostics
+                .iter()
+                .any(|d| d.severity == Severity::Warning
+                    && d.message
+                        == "node 'ab000001': unknown node type 'merge', defaulting to 'agent'"),
+            "{:?}",
+            result.diagnostics
+        );
     }
 
     // --- Script node tests (#248 / ADR-0017) ---
@@ -3501,90 +3499,6 @@ nodes:
         // at resolution time (agent_choice.rs), it does not erase them.
         assert_eq!(node.pin_harness.as_deref(), Some("claude"));
         assert!(node.harnesses.contains_key("claude"));
-    }
-
-    #[test]
-    fn merge_node_rejects_wrong_input_name() {
-        let yaml = with_start_end(
-            r#"
-name: bad-merge
-nodes:
-  - id: ab000001
-    name: bad-merge
-    type: merge
-    inputs:
-      - name: in
-        repeated: true
-    outputs:
-      - name: merged
-"#,
-        );
-        let err = parse_pipeline(&yaml).unwrap_err();
-        let msg = err.to_string();
-        assert!(
-            msg.contains("branches"),
-            "error should mention 'branches': {msg}"
-        );
-    }
-
-    #[test]
-    fn merge_node_rejects_non_repeated_input() {
-        let yaml = with_start_end(
-            r#"
-name: bad-merge
-nodes:
-  - id: ab000001
-    name: bad-merge
-    type: merge
-    inputs:
-      - name: branches
-    outputs:
-      - name: merged
-"#,
-        );
-        let err = parse_pipeline(&yaml).unwrap_err();
-        let msg = err.to_string();
-        assert!(
-            msg.contains("repeated"),
-            "error should mention 'repeated': {msg}"
-        );
-    }
-
-    #[test]
-    fn merge_node_rejects_wrong_output_name() {
-        let yaml = with_start_end(
-            r#"
-name: bad-merge
-nodes:
-  - id: ab000001
-    name: bad-merge
-    type: merge
-    inputs:
-      - name: branches
-        repeated: true
-    outputs:
-      - name: out
-"#,
-        );
-        let err = parse_pipeline(&yaml).unwrap_err();
-        let msg = err.to_string();
-        assert!(
-            msg.contains("merged"),
-            "error should mention 'merged': {msg}"
-        );
-    }
-
-    #[test]
-    fn legacy_auto_merge_resolver_field_ignored() {
-        let yaml = with_start_end(
-            r#"
-name: with-old-field
-auto_merge_resolver: true
-nodes: []
-"#,
-        );
-        let result = parse_pipeline(&yaml).unwrap();
-        assert_eq!(result.pipeline.name, "with-old-field");
     }
 
     #[test]
@@ -4616,10 +4530,10 @@ edges: []
 
     #[test]
     fn types_without_isolation_carry_no_line() {
-        // A Merge is isolated by construction and Start/End own no worktree —
-        // writing a line nobody may edit would only invite someone to edit it.
-        // A stray key is dropped rather than round-tripped.
-        for node_type in ["merge", "start", "end", "switch", "loop"] {
+        // Start/End own no worktree — writing a line nobody may edit would
+        // only invite someone to edit it. A stray key is dropped rather than
+        // round-tripped.
+        for node_type in ["start", "end", "switch", "loop"] {
             let mut v = node_value(&format!(
                 "id: n1\nname: X\ntype: {node_type}\nisolated_worktree: false\n"
             ));
@@ -4632,8 +4546,9 @@ edges: []
     fn retired_types_fail_like_any_other_invalid_value() {
         // #653: no alias, no migrator, no bespoke diagnostic. The two retired
         // types take the generic unknown-type path — the message must not name
-        // them any differently than `bogus`.
-        for retired in ["doc-only", "code-mutating"] {
+        // them any differently than `bogus`. ADR-0079: `merge` is retired the
+        // same way.
+        for retired in ["doc-only", "code-mutating", "merge"] {
             let mut v = node_value(&format!("id: n1\nname: X\ntype: {retired}\n"));
             let diags = normalize_node_value(&mut v).unwrap();
             assert_eq!(diags.len(), 1, "type {retired}");
@@ -4698,7 +4613,7 @@ edges: []
     }
 
     #[test]
-    fn is_isolated_reads_the_line_and_merge_reads_nothing() {
+    fn is_isolated_reads_the_line() {
         let yaml = "\
 name: iso
 nodes:
@@ -4709,14 +4624,6 @@ nodes:
   - id: forked
     name: Forked
     type: agent
-  - id: gather
-    name: Gather
-    type: merge
-    inputs:
-      - name: branches
-        repeated: true
-    outputs:
-      - name: merged
   - id: start
     name: Start
     type: start
@@ -4733,10 +4640,6 @@ edges: []
         let by_id = |id: &str| parsed.nodes.iter().find(|n| n.id == id).unwrap();
         assert!(!by_id("shared").is_isolated());
         assert!(by_id("forked").is_isolated());
-        assert!(
-            by_id("gather").is_isolated(),
-            "a Merge is isolated by construction, with no line to read"
-        );
         assert!(!by_id("start").is_isolated());
     }
 

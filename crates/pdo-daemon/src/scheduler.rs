@@ -344,7 +344,7 @@ pub(crate) fn evaluate_outgoing_edges_full(
                 // that flipped the whole run `completed` when the fast branch
                 // arrived, stranding the sibling `running` with no way back (its
                 // late `pdo complete` → 409, and `resume_run` is a no-op on a
-                // terminal run). Gate like a `Merge`: complete only once EVERY
+                // terminal run). Gate like any convergence: complete only once EVERY
                 // inbound edge is resolved (source completed, is the just-completed
                 // node, or is a dead branch — so a suppressed conditional path
                 // never stalls the run).
@@ -490,7 +490,7 @@ pub(crate) fn evaluate_outgoing_edges_full(
     // would sit `Running` forever. Park instead, so the state is diagnosable.
     //
     // Only when this completion produced no forward progress: if `End` is still
-    // reachable through a live path, a Merge waiting on a running sibling is
+    // reachable through a live path, a convergence waiting on a running sibling is
     // normal, not a stall.
     if !is_switch
         && !actions.iter().any(|a| {
@@ -1123,8 +1123,8 @@ fn check_all_upstream_completed(
         {
             return true;
         }
-        // ADR-0011 ("jamais de stall silencieux"): a convergence target (e.g. a
-        // `Merge`) must not wait forever on an upstream branch that is dead — a
+        // ADR-0011 ("jamais de stall silencieux"): a convergence target (any
+        // node fed by several edges) must not wait forever on an upstream branch that is dead — a
         // non-firing conditional/`else` edge, or a transitively-dead producer.
         // Such a branch never appears in `run_state` and never completes, so we
         // treat its edge as resolved rather than a blocker.
@@ -1471,9 +1471,9 @@ fn edge_is_dead(
 /// (b) it declares a `required: true` input port whose every feeding edge is dead —
 /// even if the node has other live inputs.
 ///
-/// `Start`/`End` and the structural `Loop`/`Switch`/`Merge` routers are never
-/// auto-skipped here: `End`-unreachability is the `unrouted` convergence path, and a
-/// `Merge` keeps its ADR-0006 edge-centred barrier.
+/// `Start`/`End` and the structural `Loop`/`Switch` routers are never auto-skipped
+/// here: `End`-unreachability is the `unrouted` convergence path. A convergence
+/// node whose every branch is dead is skipped like any other node (ADR-0079).
 pub(crate) fn unreachable_nodes(
     pipeline: &PipelineDef,
     run_state: &RunState,
@@ -1487,7 +1487,7 @@ pub(crate) fn unreachable_nodes(
         }
         if matches!(
             node.node_type,
-            NodeType::Start | NodeType::End | NodeType::Loop | NodeType::Switch | NodeType::Merge
+            NodeType::Start | NodeType::End | NodeType::Loop | NodeType::Switch
         ) {
             continue;
         }
@@ -2444,20 +2444,21 @@ mod tests {
         );
     }
 
-    fn make_merge_node(id: &str) -> NodeDef {
-        let mut n = make_node(id, &["branches"], &["merged"]);
-        n.node_type = NodeType::Merge;
-        n
+    /// A convergence node (ADR-0079): an ordinary `agent` fed by several
+    /// edges. It keeps the legacy `branches` / `merged` port names on purpose —
+    /// a converted `type: merge` looks exactly like this.
+    fn make_convergence_node(id: &str) -> NodeDef {
+        make_node(id, &["branches"], &["merged"])
     }
 
     /// Regression for the L5 `conditional-edge-routing` stall (ADR-0011, #144):
-    /// a `Merge` fed by three unconditional edges (hotfix, security-review,
+    /// a convergence node fed by three unconditional edges (hotfix, security-review,
     /// backlog) must NOT wait forever on `backlog`, which is permanently
     /// suppressed because its inbound `else` edge from `classifier` did not fire
     /// (a guarded sibling matched). "jamais de stall silencieux."
-    fn fanout_merge_pipeline() -> PipelineDef {
+    fn fanout_convergence_pipeline() -> PipelineDef {
         PipelineDef {
-            name: "cond-merge".into(),
+            name: "cond-convergence".into(),
             version: None,
             variables: HashMap::new(),
             nodes: vec![
@@ -2465,7 +2466,7 @@ mod tests {
                 make_node("hotfix", &["triage"], &["patch"]),
                 make_node("security", &["triage"], &["review"]),
                 make_node("backlog", &["triage"], &["note"]),
-                make_merge_node("merge1"),
+                make_convergence_node("gather"),
             ],
             edges: vec![
                 make_cond_edge(
@@ -2485,9 +2486,9 @@ mod tests {
                     false,
                 ),
                 make_cond_edge("classifier", "triage", "backlog", "triage", None, true),
-                make_edge("hotfix", "patch", "merge1", "branches"),
-                make_edge("security", "review", "merge1", "branches"),
-                make_edge("backlog", "note", "merge1", "branches"),
+                make_edge("hotfix", "patch", "gather", "branches"),
+                make_edge("security", "review", "gather", "branches"),
+                make_edge("backlog", "note", "gather", "branches"),
             ],
             loops: Vec::new(),
             notes: Vec::new(),
@@ -2507,8 +2508,8 @@ mod tests {
     }
 
     #[test]
-    fn merge_spawns_when_suppressed_else_branch_never_runs() {
-        let pipeline = fanout_merge_pipeline();
+    fn convergence_spawns_when_suppressed_else_branch_never_runs() {
+        let pipeline = fanout_convergence_pipeline();
 
         // classifier + the two matched branches completed; backlog never spawned
         // (its `else` edge was suppressed). The second branch (security) is the
@@ -2536,19 +2537,19 @@ mod tests {
 
         assert!(
             actions.contains(&SchedulerAction::Spawn {
-                node_id: "merge1".into(),
+                node_id: "gather".into(),
                 iter: 1,
             }),
-            "merge must spawn once both fired branches completed, ignoring the \
+            "the convergence node must spawn once both fired branches completed, ignoring the \
              permanently-suppressed backlog branch: {actions:?}"
         );
     }
 
     #[test]
-    fn merge_still_waits_for_a_fired_branch_that_is_not_yet_done() {
-        // The suppression relief must NOT let a Merge fire early: while a branch
-        // that DID fire (hotfix) is still running, the Merge must keep waiting.
-        let pipeline = fanout_merge_pipeline();
+    fn convergence_still_waits_for_a_fired_branch_that_is_not_yet_done() {
+        // The suppression relief must NOT let a convergence fire early: while a branch
+        // that DID fire (hotfix) is still running, the convergence must keep waiting.
+        let pipeline = fanout_convergence_pipeline();
 
         let mut state = empty_run_state();
         state
@@ -2571,16 +2572,16 @@ mod tests {
 
         assert!(
             !actions.contains(&SchedulerAction::Spawn {
-                node_id: "merge1".into(),
+                node_id: "gather".into(),
                 iter: 1,
             }),
-            "merge must NOT spawn while a fired branch (hotfix) is still running: {actions:?}"
+            "the convergence node must NOT spawn while a fired branch (hotfix) is still running: {actions:?}"
         );
     }
 
     /// Edge case (c) — non-regression: a classic all-unconditional fan-in still
-    /// converges. Two unconditional branches into a Merge, both completed, must
-    /// spawn the Merge. (The edge-resolution barrier must not break the simple,
+    /// converges. Two unconditional branches into a convergence node, both completed,
+    /// must spawn it. (The edge-resolution barrier must not break the simple,
     /// pre-conditional case.)
     fn unconditional_fanin_pipeline() -> PipelineDef {
         PipelineDef {
@@ -2590,13 +2591,13 @@ mod tests {
             nodes: vec![
                 make_node("a", &["task"], &["out"]),
                 make_node("b", &["task"], &["out"]),
-                make_merge_node("merge1"),
+                make_convergence_node("gather"),
                 make_end_node(),
             ],
             edges: vec![
-                make_edge("a", "out", "merge1", "branches"),
-                make_edge("b", "out", "merge1", "branches"),
-                make_end_edge("merge1", "merged", "done"),
+                make_edge("a", "out", "gather", "branches"),
+                make_edge("b", "out", "gather", "branches"),
+                make_end_edge("gather", "merged", "done"),
             ],
             loops: Vec::new(),
             notes: Vec::new(),
@@ -2623,17 +2624,17 @@ mod tests {
 
         assert!(
             actions.contains(&SchedulerAction::Spawn {
-                node_id: "merge1".into(),
+                node_id: "gather".into(),
                 iter: 1,
             }),
-            "classic unconditional fan-in must still converge on merge1: {actions:?}"
+            "classic unconditional fan-in must still converge on gather: {actions:?}"
         );
     }
 
     /// Edge case (d) — death propagation over >=2 levels. `mid` is fed by a
     /// single guarded edge from `classifier` that did not fire (its sibling
-    /// guard matched), so `mid` is dead; `merge1` is fed by `mid` (2nd-level
-    /// dead branch) and by `hotfix` (live, completed). The Merge must spawn on
+    /// guard matched), so `mid` is dead; `gather` is fed by `mid` (2nd-level
+    /// dead branch) and by `hotfix` (live, completed). The convergence must spawn on
     /// the single live branch, treating the transitively-dead `mid` branch as
     /// resolved.
     fn two_level_death_pipeline() -> PipelineDef {
@@ -2645,7 +2646,7 @@ mod tests {
                 make_node("classifier", &["task"], &["triage"]),
                 make_node("hotfix", &["triage"], &["patch"]),
                 make_node("mid", &["triage"], &["out"]),
-                make_merge_node("merge1"),
+                make_convergence_node("gather"),
                 make_end_node(),
             ],
             edges: vec![
@@ -2666,9 +2667,9 @@ mod tests {
                     Some("severity: { eq: low }"),
                     false,
                 ),
-                make_edge("hotfix", "patch", "merge1", "branches"),
-                make_edge("mid", "out", "merge1", "branches"),
-                make_end_edge("merge1", "merged", "done"),
+                make_edge("hotfix", "patch", "gather", "branches"),
+                make_edge("mid", "out", "gather", "branches"),
+                make_end_edge("gather", "merged", "done"),
             ],
             loops: Vec::new(),
             notes: Vec::new(),
@@ -2678,7 +2679,7 @@ mod tests {
     }
 
     #[test]
-    fn merge_spawns_past_two_level_dead_branch() {
+    fn convergence_spawns_past_two_level_dead_branch() {
         let pipeline = two_level_death_pipeline();
         let mut state = empty_run_state();
         state
@@ -2707,28 +2708,28 @@ mod tests {
 
         assert!(
             actions.contains(&SchedulerAction::Spawn {
-                node_id: "merge1".into(),
+                node_id: "gather".into(),
                 iter: 1,
             }),
-            "merge must spawn past a transitively-dead (2-level) branch: {actions:?}"
+            "the convergence node must spawn past a transitively-dead (2-level) branch: {actions:?}"
         );
     }
 
-    /// Edge case (a) — an all-dead Merge is SKIPPED when End stays reachable.
-    /// Both branches into `merge1` are guarded and neither matched, so `merge1`
+    /// Edge case (a) — an all-dead convergence is SKIPPED when End stays reachable.
+    /// Both branches into `gather` are guarded and neither matched, so `gather`
     /// has zero fired branches and is itself dead. A separate unconditional path
     /// `classifier -> end` keeps End reachable, so the run must reach End rather
-    /// than stall waiting on the dead `merge1`.
-    fn all_dead_merge_with_alt_end_pipeline() -> PipelineDef {
+    /// than stall waiting on the dead `gather`.
+    fn all_dead_convergence_with_alt_end_pipeline() -> PipelineDef {
         PipelineDef {
-            name: "all-dead-merge".into(),
+            name: "all-dead-convergence".into(),
             version: None,
             variables: HashMap::new(),
             nodes: vec![
                 make_node("classifier", &["task"], &["triage"]),
                 make_node("hotfix", &["triage"], &["patch"]),
                 make_node("security", &["triage"], &["review"]),
-                make_merge_node("merge1"),
+                make_convergence_node("gather"),
                 make_end_node(),
             ],
             edges: vec![
@@ -2748,10 +2749,10 @@ mod tests {
                     Some("security: { eq: true }"),
                     false,
                 ),
-                make_edge("hotfix", "patch", "merge1", "branches"),
-                make_edge("security", "review", "merge1", "branches"),
-                // merge1 -> end, AND a direct classifier -> end keeping End reachable.
-                make_end_edge("merge1", "merged", "merged-done"),
+                make_edge("hotfix", "patch", "gather", "branches"),
+                make_edge("security", "review", "gather", "branches"),
+                // gather -> end, AND a direct classifier -> end keeping End reachable.
+                make_end_edge("gather", "merged", "merged-done"),
                 make_end_edge("classifier", "triage", "direct-done"),
             ],
             loops: Vec::new(),
@@ -2762,15 +2763,15 @@ mod tests {
     }
 
     #[test]
-    fn all_dead_merge_is_skipped_when_end_reachable() {
-        let pipeline = all_dead_merge_with_alt_end_pipeline();
+    fn all_dead_convergence_is_skipped_when_end_reachable() {
+        let pipeline = all_dead_convergence_with_alt_end_pipeline();
         let mut state = empty_run_state();
         state
             .nodes
             .insert("classifier".into(), completed_node("classifier"));
 
         // Artifact matches NEITHER guard: both hotfix and security branches die,
-        // so merge1 has zero fired branches.
+        // so gather has zero fired branches.
         let fm: HashMap<String, serde_yaml::Value> =
             [("severity".into(), serde_yaml::Value::String("low".into()))]
                 .into_iter()
@@ -2789,29 +2790,36 @@ mod tests {
             &fm_by_node,
         );
 
-        // The direct edge fires End; the run must not stall on the dead merge1.
+        // The direct edge fires End; the run must not stall on the dead gather.
         assert!(
             actions.contains(&SchedulerAction::Complete)
                 || actions
                     .iter()
                     .any(|a| matches!(a, SchedulerAction::Halt { .. })),
-            "an all-dead merge must not silently stall the run: {actions:?}"
+            "an all-dead convergence must not silently stall the run: {actions:?}"
         );
         assert!(
             !actions.contains(&SchedulerAction::Spawn {
-                node_id: "merge1".into(),
+                node_id: "gather".into(),
                 iter: 1,
             }),
-            "an all-dead merge must NOT spawn: {actions:?}"
+            "an all-dead convergence must NOT spawn: {actions:?}"
+        );
+        // ADR-0079: the convergence is an ordinary node, so an all-dead one is
+        // auto-skipped (the retired Merge was the one type exempt from it).
+        let dead = unreachable_nodes(&pipeline, &state, &fm_by_node, &HashMap::new());
+        assert!(
+            dead.iter().any(|(id, _)| id == "gather"),
+            "an all-dead convergence must be skipped: {dead:?}"
         );
     }
 
     /// Edge case (b) — death cascade reaches End: explicit halt, never a silent
-    /// stall. The ONLY path to End is via `merge1`; both branches into `merge1`
-    /// are guarded and neither matched, so `merge1` is all-dead and End becomes
+    /// stall. The ONLY path to End is via `gather`; both branches into `gather`
+    /// are guarded and neither matched, so `gather` is all-dead and End becomes
     /// unreachable. Per ADR-0011 ("jamais de stall silencieux") the scheduler
     /// must emit an explicit Halt rather than leaving the run Running forever.
-    fn all_dead_merge_only_end_pipeline() -> PipelineDef {
+    fn all_dead_convergence_only_end_pipeline() -> PipelineDef {
         PipelineDef {
             name: "all-dead-only-end".into(),
             version: None,
@@ -2820,7 +2828,7 @@ mod tests {
                 make_node("classifier", &["task"], &["triage"]),
                 make_node("hotfix", &["triage"], &["patch"]),
                 make_node("security", &["triage"], &["review"]),
-                make_merge_node("merge1"),
+                make_convergence_node("gather"),
                 make_end_node(),
             ],
             edges: vec![
@@ -2840,9 +2848,9 @@ mod tests {
                     Some("security: { eq: true }"),
                     false,
                 ),
-                make_edge("hotfix", "patch", "merge1", "branches"),
-                make_edge("security", "review", "merge1", "branches"),
-                make_end_edge("merge1", "merged", "done"),
+                make_edge("hotfix", "patch", "gather", "branches"),
+                make_edge("security", "review", "gather", "branches"),
+                make_end_edge("gather", "merged", "done"),
             ],
             loops: Vec::new(),
             notes: Vec::new(),
@@ -2853,14 +2861,14 @@ mod tests {
 
     #[test]
     fn death_cascade_to_unreachable_end_halts_explicitly() {
-        let pipeline = all_dead_merge_only_end_pipeline();
+        let pipeline = all_dead_convergence_only_end_pipeline();
         let mut state = empty_run_state();
         state
             .nodes
             .insert("classifier".into(), completed_node("classifier"));
 
-        // Artifact matches neither guard: both branches die, merge1 is all-dead,
-        // and End (reachable only through merge1) becomes unreachable.
+        // Artifact matches neither guard: both branches die, gather is all-dead,
+        // and End (reachable only through gather) becomes unreachable.
         let fm: HashMap<String, serde_yaml::Value> =
             [("severity".into(), serde_yaml::Value::String("low".into()))]
                 .into_iter()
@@ -2890,12 +2898,12 @@ mod tests {
 
     /// Guard against a false-positive halt: while a branch that DID fire is
     /// still running, End is still reachable through it, so the unrouted-halt
-    /// detector must stay its hand. The Merge keeps waiting; no Halt is emitted.
+    /// detector must stay its hand. The convergence keeps waiting; no Halt is emitted.
     #[test]
     fn no_halt_while_a_fired_branch_is_still_running() {
-        // Same shape as all_dead_merge_only_end, but the artifact matches a guard
+        // Same shape as all_dead_convergence_only_end, but the artifact matches a guard
         // (severity=high), so `hotfix` fired and is running; `security` died.
-        let pipeline = all_dead_merge_only_end_pipeline();
+        let pipeline = all_dead_convergence_only_end_pipeline();
         let mut state = empty_run_state();
         state
             .nodes
@@ -2912,7 +2920,7 @@ mod tests {
                 .collect();
 
         // Re-evaluate the classifier (e.g. on a later tick): hotfix already
-        // spawned (running), security dead. End reachable through hotfix->merge1.
+        // spawned (running), security dead. End reachable through hotfix->gather.
         let actions = evaluate_outgoing_edges_full(
             &pipeline,
             &state,
