@@ -86,8 +86,11 @@ export function pipelineToYamlObject(p: PipelineDef): Record<string, unknown> {
   if (p.grid_size) obj.grid_size = p.grid_size;
   if (Object.keys(p.variables).length > 0) {
     const vars: Record<string, unknown> = {};
+    // Short form (`name: <default>`) when the daemon would infer the declared
+    // type back from the default; the explicit `{ type, default }` form
+    // otherwise, so a `float` defaulting to `3` does not reload as an `int`.
     for (const [k, v] of Object.entries(p.variables)) {
-      vars[k] = v.default;
+      vars[k] = inferVariableType(v.default) === v.type ? v.default : { type: v.type, default: v.default };
     }
     obj.variables = vars;
   }
@@ -455,4 +458,17 @@ function dumpYaml(val: unknown, indent: number): string {
       .join("\n" + prefix);
   }
   return String(val);
+}
+
+/**
+ * The type the daemon infers from a short-form variable's value
+ * (`infer_variable_type`, pipeline.rs): bool, int / float by the number's form,
+ * list for a sequence, string for anything else. A JS number with no fractional
+ * part serializes as an integer, hence `int`.
+ */
+function inferVariableType(value: unknown): string {
+  if (typeof value === "boolean") return "bool";
+  if (typeof value === "number") return Number.isInteger(value) ? "int" : "float";
+  if (Array.isArray(value)) return "list";
+  return "string";
 }

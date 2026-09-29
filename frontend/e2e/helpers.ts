@@ -39,7 +39,8 @@ export function runMultipart(fields: Record<string, string>): Record<string, str
 
 /**
  * Open a repo/user pipeline into the edit canvas via the post-refonte
- * UnifiedLeftPanel: switch to the pipelines tab, then click the entry by name.
+ * UnifiedLeftPanel: switch to the Library tab (labelled « Pipelines »; aimed at by
+ * its stable test id, not its label), then click the entry by name.
  *
  * Replaces the pre-canvas-refonte `[data-testid='edit-toggle']` flow, which no
  * longer exists — pipelines are opened from the left panel's pipelines tab

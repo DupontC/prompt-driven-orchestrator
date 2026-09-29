@@ -1,4 +1,5 @@
-import { useCallback, useEffect, useReducer, useRef, useState } from "react";
+import { useCallback, useEffect, useLayoutEffect, useReducer, useRef, useState } from "react";
+import { usePanelRef } from "react-resizable-panels";
 import { ArrowLeft, GitFork, Settings, BarChart3 } from "lucide-react";
 import { useDaemonSocket } from "./hooks/useDaemonSocket";
 import type { ConnectionStatus } from "./hooks/useDaemonSocket";
@@ -30,10 +31,10 @@ import SaveErrorModal from "./components/SaveErrorModal";
 import ConfirmCloseTabsModal from "./components/ConfirmCloseTabsModal";
 import { useRecentReposStore } from "./stores/recentReposStore";
 import type { TabId } from "./components/PipelineInfoPanel";
+import { infoPanelButtons, toggleAssistantTab, toggleInfoTab } from "./lib/infoPanelReconcile";
 import EditCanvas from "./components/EditCanvas";
 import TabBar from "./components/TabBar";
 import NodeInspector from "./components/NodeInspector";
-import PipelineInspector from "./components/PipelineInspector";
 import PipelineInfoPanel from "./components/PipelineInfoPanel";
 import StartInspector from "./components/StartInspector";
 import EndInspector from "./components/EndInspector";
@@ -62,6 +63,8 @@ import {
 
 const PANEL_IDS = ["left", "center", "right"];
 const DEFAULT_SIZES = { left: 15, center: 60, right: 25 };
+/** #949: the right pane collapses on its own; the canvas takes its width meanwhile. */
+const RIGHT_COLLAPSIBLE = { panelId: "right", absorbInto: "center" };
 
 function useRuns() {
   const [runs, setRuns] = useState<RunListEntry[]>([]);
@@ -327,7 +330,9 @@ export default function App() {
   // panel refetches its fire history (it otherwise only fetches on trigger.id).
   const [firesRefreshKey, setFiresRefreshKey] = useState(0);
   const [infoPanelOpen, setInfoPanelOpen] = useState(false);
-  const [infoPanelInitialTab, setInfoPanelInitialTab] = useState<TabId | undefined>(undefined);
+  // #938: the panel's tab is App-owned (controlled), so the toolbar lights its
+  // two buttons from the tab actually shown — never from the tab it opened on.
+  const [infoPanelTab, setInfoPanelTab] = useState<TabId>("info");
   const [infoPanelScrollToLine, setInfoPanelScrollToLine] = useState<number | undefined>(undefined);
   const mountedRef = useRef(false);
   const reloadPipeline = useEditStore((s) => s.reloadPipeline);
@@ -341,6 +346,7 @@ export default function App() {
   const editUndo = useEditStore((s) => s.undo);
   const editRedo = useEditStore((s) => s.redo);
   const editActiveTabId = useEditStore((s) => s.activeTabId);
+  const editLastRekey = useEditStore((s) => s.lastRekey);
   const resolveConflict = useEditStore((s) => s.resolveConflict);
   const clearSaveError = useEditStore((s) => s.clearSaveError);
   // #342: a single-tab open/replace parked because it would discard unsaved
@@ -418,11 +424,14 @@ export default function App() {
   // useRightPaneRouter (#359). It runs the setState-during-render reconciliations
   // in-body here (App owns `selectedTriggerId`/`infoPanelOpen`, passed in with
   // their setters) so no stale frame of a shadowed panel is painted.
-  const { paneOwner, selectedTrigger, triggerPromptRequired, runNode } =
+  const { paneOwner, selectedTrigger, triggerPromptRequired, runNode, collapsed: rightPaneCollapsed } =
     useRightPaneRouter({
       selection,
       editActiveTabId,
+      tabRekey: editLastRekey,
       hasEditTab,
+      isRunTab: isEditingRun,
+      selectedNodeId,
       selectedTriggerId,
       setSelectedTriggerId,
       triggerOpenedTabId,
@@ -569,29 +578,44 @@ export default function App() {
     }
   }
 
-  const handleToggleInfo = useCallback(() => {
-    setInfoPanelOpen((prev) => {
-      if (!prev) {
-        setInfoPanelInitialTab(undefined);
-        setInfoPanelScrollToLine(undefined);
-      }
-      return !prev;
-    });
-  }, []);
+  // #938 (story PDO-3): the "agent" glyph and `(i)` are mutually exclusive, lit
+  // from the RESOLVED tab of the panel (`resolveInfoTab`, the rule the panel
+  // renders with). Each closes the panel when it is the lit one, otherwise
+  // opens — or switches — the panel on its own tab.
+  const infoPanelRun = isEditingRun ? selectedRun : null;
+  const infoHasRun = infoPanelRun != null;
+  const infoHasAssistant = !infoHasRun && !!assistantId;
+  const { assistantActive, infoActive } = infoPanelButtons(
+    { open: infoPanelOpen, tab: infoPanelTab },
+    { hasRun: infoHasRun, hasAssistant: infoHasAssistant },
+  );
+
+  const applyInfoToggle = useCallback(
+    (toggle: typeof toggleInfoTab) => {
+      const next = toggle(
+        { open: infoPanelOpen, tab: infoPanelTab },
+        { hasRun: infoHasRun, hasAssistant: infoHasAssistant },
+      );
+      setInfoPanelTab(next.tab);
+      setInfoPanelScrollToLine(undefined);
+      setInfoPanelOpen(next.open);
+    },
+    [infoPanelOpen, infoPanelTab, infoHasRun, infoHasAssistant],
+  );
+
+  const handleToggleInfo = useCallback(() => applyInfoToggle(toggleInfoTab), [applyInfoToggle]);
 
   const handleCloseInfo = useCallback(() => {
     setInfoPanelOpen(false);
   }, []);
 
-  // #302 / ADR-0048: the toolbar Bot glyph opens the info panel focused on the
-  // Assistant tab (the library authoring copilot). Same shape as `handleViewYaml`:
-  // set the initial tab, then open. The panel is keyed on `infoPanelInitialTab`,
-  // so this remounts it at the Assistant tab.
-  const handleOpenAssistant = useCallback(() => {
-    setInfoPanelInitialTab("assistant");
-    setInfoPanelScrollToLine(undefined);
-    setInfoPanelOpen(true);
-  }, []);
+  // #302 / ADR-0048: the toolbar Bot glyph toggles the info panel on the
+  // Assistant tab (the library authoring copilot). No remount (#938): the
+  // controlled tab just moves, so the Assistant keeps its conversation.
+  const handleToggleAssistant = useCallback(
+    () => applyInfoToggle(toggleAssistantTab),
+    [applyInfoToggle],
+  );
 
   useEffect(() => {
     if (!mountedRef.current) {
@@ -803,8 +827,59 @@ export default function App() {
     (d) => d.id === selectedNodeId,
   )?.node_type ?? null;
 
-  const layout = useResizableLayout("run", PANEL_IDS, DEFAULT_SIZES);
+  const layout = useResizableLayout("run", PANEL_IDS, DEFAULT_SIZES, RIGHT_COLLAPSIBLE);
   const minSizePx = `${layout.minSizePx}px`;
+
+  // #949 — the right pane collapses when it has nothing to show (the router's
+  // `collapsed`) and reopens, instantly, at the last width the user chose. The
+  // panel is `collapsible` ONLY while it is (or is about to be) collapsed: a
+  // collapsible panel also collapses when dragged under its min size, and there
+  // is no manual collapse gesture (Q9). The library only reads a panel's new
+  // constraints once its group re-registers — in a re-render App's layout
+  // effect does not wait for — so `syncRightPane` is idempotent and retries in
+  // a microtask (still before paint: no frame of the stale pane) until the
+  // collapse lands. Expanding resizes to the PERSISTED width, not
+  // the library's in-memory one, so it also holds after a reload; the persisted
+  // width itself never records the collapse (useResizableLayout).
+  const rightPanelRef = usePanelRef();
+  const rightCollapsedRef = useRef(rightPaneCollapsed);
+  rightCollapsedRef.current = rightPaneCollapsed;
+  const [rightCollapsible, setRightCollapsible] = useState(rightPaneCollapsed);
+  const { persistedSize, onLayoutChanged: persistLayout } = layout;
+  const syncRightPane = useCallback(
+    function sync(attempt = 0) {
+      const panel = rightPanelRef.current;
+      if (!panel) return;
+      let settled = false;
+      try {
+        if (rightCollapsedRef.current) {
+          if (!panel.isCollapsed()) panel.collapse();
+          settled = panel.isCollapsed();
+        } else {
+          if (panel.isCollapsed()) {
+            panel.resize(`${persistedSize("right") ?? DEFAULT_SIZES.right}%`);
+          }
+          settled = true;
+        }
+      } catch {
+        // The group is between two registrations — retried below.
+      }
+      if (!settled && attempt < 5) queueMicrotask(() => sync(attempt + 1));
+    },
+    [rightPanelRef, persistedSize],
+  );
+  useLayoutEffect(() => {
+    if (rightPaneCollapsed) {
+      // No-op until the collapsible constraint lands — syncRightPane retries.
+      setRightCollapsible(true);
+      syncRightPane();
+    } else {
+      // Expand first, while still collapsible, THEN drop the constraint: a
+      // non-collapsible panel at 0% would be clamped to its min size.
+      syncRightPane();
+      setRightCollapsible(false);
+    }
+  }, [rightPaneCollapsed, syncRightPane]);
   const conflictTab = openTabs.find((t) => t.conflict != null);
   const saveErrorTab = openTabs.find((t) => t.saveError != null);
 
@@ -814,7 +889,7 @@ export default function App() {
 
   const handleViewYaml = useCallback(() => {
     if (!saveErrorTab) return;
-    setInfoPanelInitialTab("yaml");
+    setInfoPanelTab("yaml");
     setInfoPanelScrollToLine(saveErrorTab.saveError?.line);
     setInfoPanelOpen(true);
     clearSaveError(saveErrorTab.id);
@@ -831,7 +906,7 @@ export default function App() {
         <ResizablePanelGroup
           orientation="horizontal"
           defaultLayout={layout.defaultLayout}
-          onLayoutChanged={layout.onLayoutChanged}
+          onLayoutChanged={persistLayout}
         >
           <ResizablePanel defaultSize={layout.defaultLayout.left} minSize={minSizePx} id="left">
             <UnifiedLeftPanel
@@ -885,13 +960,14 @@ export default function App() {
                     await delLib(name);
                     refreshLibrary();
                   }}
-                  infoOpen={infoPanelOpen}
+                  infoOpen={infoActive}
                   onToggleInfo={handleToggleInfo}
                   onCloseInfo={handleCloseInfo}
-                  assistantActive={infoPanelOpen && infoPanelInitialTab === "assistant"}
-                  onOpenAssistant={handleOpenAssistant}
+                  assistantActive={assistantActive}
+                  onOpenAssistant={handleToggleAssistant}
                   runState={selectedRun}
                   onSelectRun={handleSelectRun}
+                  rightPaneCollapsed={rightPaneCollapsed}
                 />
               </div>
             ) : (
@@ -901,9 +977,24 @@ export default function App() {
             )}
           </ResizablePanel>
 
-          <ResizableHandle />
+          {/* #949: no handle while collapsed — the pane cannot be dragged out.
+              `invisible`, not `hidden`: a display:none separator has an empty
+              rect, which breaks the library's hit regions for the OTHER handle. */}
+          <ResizableHandle
+            id="right-pane-handle"
+            disabled={rightPaneCollapsed}
+            className={rightPaneCollapsed ? "invisible" : undefined}
+          />
 
-          <ResizablePanel defaultSize={layout.defaultLayout.right} minSize={minSizePx} id="right" className="panel-r">
+          <ResizablePanel
+            defaultSize={layout.defaultLayout.right}
+            minSize={minSizePx}
+            collapsible={rightCollapsible}
+            panelRef={rightPanelRef}
+            id="right"
+            className="panel-r"
+            data-collapsed={rightPaneCollapsed || undefined}
+          >
             {paneOwner === "trigger" && selectedTrigger ? (
               <TriggerDetailPanel
                 key={selectedTrigger.id}
@@ -914,11 +1005,11 @@ export default function App() {
               />
             ) : paneOwner === "info" ? (
               <PipelineInfoPanel
-                key={infoPanelInitialTab ?? "default"}
-                run={isEditingRun ? selectedRun : null}
+                run={infoPanelRun}
                 pipeline={editTab?.pipeline ?? null}
                 onClose={handleCloseInfo}
-                initialTab={infoPanelInitialTab}
+                tab={infoPanelTab}
+                onTabChange={setInfoPanelTab}
                 scrollToLine={infoPanelScrollToLine}
                 assistantId={assistantId}
                 onRefreshRun={refreshRun}
@@ -979,9 +1070,8 @@ export default function App() {
                       onOpenSettings={() => openSettings({ category: "agents", section: "pipeline-manager" })}
                     />
                   )}
-                {selection.kind === "none" && !isEditingRun && (
-                  <PipelineInspector />
-                )}
+                {/* Notion #6 / #948: an empty selection on a template shows
+                    nothing — its settings live in Pipeline info, opened by `i`. */}
               </>
             ) : (
               <>

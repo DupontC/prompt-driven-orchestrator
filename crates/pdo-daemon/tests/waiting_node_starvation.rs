@@ -24,7 +24,7 @@
 
 use std::time::Duration;
 
-use crate::common::TestDaemon;
+use crate::common::{set_stored_session_cap, TestDaemon};
 use pdo_daemon::tmux_session_manager;
 
 const PIPELINE_NAME: &str = "starve";
@@ -115,16 +115,6 @@ fn git_init_with_commit(repo: &std::path::Path) -> anyhow::Result<()> {
     Ok(())
 }
 
-async fn set_session_cap(daemon: &TestDaemon, cap: u32) {
-    let resp = reqwest::Client::new()
-        .put(format!("{}/settings", daemon.url()))
-        .json(&serde_json::json!({ "session_cap": cap }))
-        .send()
-        .await
-        .unwrap();
-    assert_eq!(resp.status(), 200, "PUT /settings session_cap={cap}");
-}
-
 async fn create_run(daemon: &TestDaemon) -> String {
     let body = serde_json::json!({
         "pipeline": PIPELINE_NAME,
@@ -186,7 +176,7 @@ async fn boot_recovery_redrives_a_waiting_node_after_freeing_a_slot() {
 
     let daemon = TestDaemon::spawn(seed).await.unwrap();
     let socket = daemon.tmux_socket();
-    set_session_cap(&daemon, 2).await;
+    set_stored_session_cap(&daemon, 2).await;
 
     // Run A saturates the cap: leaf1 + leader both Running (2/2 slots).
     let run_a = create_run(&daemon).await;

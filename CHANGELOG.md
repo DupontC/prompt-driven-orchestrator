@@ -10,7 +10,7 @@ ascendante** : la casse se signale ici et par un bump majeur, jamais en gardant 
 morts. Seule contrainte non négociable — les **données historiques restent lisibles** : un Run
 archivé s'ouvre et se chiffre quelle que soit la version qui a écrit son payload.
 
-## 1.111.0 — Le nœud Merge est retiré (#942, spec #941, ADR-0079)
+## 1.113.0 — Le nœud Merge est retiré (#942, spec #941, ADR-0079)
 
 - Le type de nœud `merge` disparaît de l'éditeur, du modèle et du runtime. La convergence est
   portée par **tout nœud** : reliez plusieurs arêtes à un `agent`, il attend que chaque branche
@@ -30,6 +30,94 @@ archivé s'ouvre et se chiffre quelle que soit la version qui a écrit son paylo
 - Canvas : une arête auto qui sort à droite vers une cible située en arrière (typiquement la
   sortie sans `side` d'un ancien Merge, au-dessus de son End) ne traverse plus sa carte source.
   Elle part par une patte du côté de sortie et contourne la carte.
+
+## 1.112.1
+**Modales bornées à la hauteur de la fenêtre** (#940, spec #939, story Notion PDO-8).
+
+- Edit project / Name project, profil agentique, destruction de loops et fermeture d'onglets
+  non sauvegardés tiennent dans 85 % de la fenêtre : titre et actions restent visibles, seul le
+  corps défile (modèle : New Run).
+
+## 1.112.0
+**Le panneau de droite se replie quand il n'a rien à montrer** (#949, spec #947, story Notion #6).
+
+- Template sans sélection, écran d'accueil, fermeture de Pipeline info (✕ ou bouton (i) de la barre d'outils) sans
+  sélection : le panneau de droite se replie et le canvas prend toute la largeur.
+- Il se déplie, sans animation, à la dernière largeur choisie dès qu'un contenu le réclame :
+  sélection de nœud, d'edge, de région ou de note, Pipeline info, Assistant, Trigger. La
+  largeur choisie survit au rechargement ; le repli ne l'écrase jamais.
+- Pas de repli manuel : la poignée disparaît pendant le repli, et on ne peut pas réduire le
+  panneau sous sa taille minimale en le glissant.
+- Un Run à sélection vide garde son panneau Run ; un Run archivé garde « Run archived ».
+- Le canvas se recadre au dépliage comme au repli : il garde son centre visuel, et le nœud
+  sélectionné reste entièrement visible au lieu de glisser sous le panneau. Au dépliage, le
+  décalage s'arrête là où le bord gauche du graphe rejoint celui du canvas : un graphe déplacé
+  vers la gauche ne passe pas sous la barre latérale. Un glissement de la poignée ou un
+  redimensionnement de la fenêtre ne recadre pas.
+
+## 1.111.0
+**Pipeline info, seule surface des métadonnées d'un pipeline** (#948, spec #947, story Notion #6).
+
+- L'onglet Info de Pipeline info (bouton `i`) porte, sous l'en-tête : Identity (nom, version,
+  Prompt required), Variables (ajout, renommage, type, défaut, suppression), Canvas (grille de
+  câblage Global / S / M / L) et les stats du graphe. Éditable sur une template comme toute
+  édition (onglet dirty, undo, Save) ; en lecture seule sur un Run, actif ou archivé.
+- Le Pipeline Inspector disparaît, avec le bloc « Description » : sur une template, une
+  sélection vide n'affiche plus rien à droite, seul `i` ouvre les réglages du pipeline.
+- L'onglet YAML montre une édition non enregistrée ; Copy et Download exportent toujours le
+  dernier document enregistré.
+- Renommer une variable se tape au clavier : la ligne garde le focus et sa place. Un nom vide
+  ou déjà pris reste local (signalé en rouge) et revient au dernier nom valide à la sortie
+  du champ ; un Undo restaure le nom d'origine.
+- Une variable dont le défaut ne porte pas le type (un `float` qui vaut `3`) s'écrit sous la
+  forme explicite `{ type, default }` : son type survit au rechargement.
+- Un Save qui renomme le pipeline laisse Pipeline info ouvert (même onglet, nouvel id).
+- Sur un Run actif, la note de l'onglet Info précise que les réglages sont en lecture seule.
+## 1.111.0
+**Provisioning replié par défaut, expliqué et diagnosticable** (#951, spec #950, story Notion
+PDO Dojo n° 7, contrat ADR-0061 inchangé).
+
+- Le bloc Provisioning est un disclosure replié à l'ouverture de New Run, de l'édition de
+  Projet, de l'inspecteur de node isolé et du détail de node ; Settings › Sandbox & worktrees le
+  garde déplié. Aucun état ouvert/fermé n'est mémorisé.
+- Replié, l'en-tête résume `Provisioning · N inherited · M at this level` (ou `· none`) et un
+  sous-titre explique à quoi sert le provisioning. L'aperçu tourne même replié.
+- Infobulles (Radix, atteignables au clavier) sur Copy, Hardlink, Symlink et sur la bande de
+  niveaux (héritage Instance → Project → Run → Node).
+- Un conflit de modes ou une erreur d'aperçu ouvre le bloc tout seul et le garde ouvert (un
+  clic sur l'en-tête pendant le blocage est ignoré, il ne replie pas le bloc après correction).
+  En cas d'erreur d'aperçu, le résumé dit `M at this level · inherited unknown` plutôt que
+  `none`.
+- Dans New Run, le bouton Launch grisé en donne la raison (« Provisioning has a mode
+  conflict » / erreur d'aperçu) dans une infobulle Radix, au survol comme au clavier (le focus
+  va sur un wrapper, le bouton désactivé n'étant pas focalisable).
+- Disparition du bouton « Configure worktree provisioning… » (Projet) et de la bascule
+  « Configure / Hide provisioning » (inspecteur) ; « Resolve against » vit dans le corps déplié
+  (le rappel « Resolve against … » de l'en-tête s'efface alors, et se tronque au lieu de couper
+  le résumé).
+
+## 1.110.3
+**Toolbar : boutons Assistant et Info mutuellement exclusifs** (#938, spec #937, story PDO-3).
+
+- Le glyphe « agent » et le bouton Pipeline info reflètent l'onglet affiché du panneau droit :
+  Assistant allume « agent », Info/YAML (et les onglets du Run) allument `i`, jamais les deux.
+- Cliquer le bouton de l'onglet affiché ferme le panneau ; cliquer l'autre bascule d'onglet.
+
+## 1.110.2
+**Canvas : une edge naît uniquement d'un drag, bord de node à 4,5 px** (#936, spec #935, story #934).
+
+- Dans l'éditeur de pipeline, cliquer un bord de node puis un autre node ne crée plus d'edge :
+  seul le glisser d'un bord vers un node en crée une.
+- La zone sensible du bord de node passe de 9 px à 4,5 px.
+
+## 1.110.1
+**Coquille : le panneau secondaire se ferme par ✕, Échap ou bascule** (#944, spec #943, story Notion #4).
+
+- Stats › Cost › *Pricing details* s'ouvre sous le header, qui reste accessible, dans le même
+  cadre que la Banque de skills : bouton ✕ et indication « Esc returns to Stats ».
+- Le panneau se ferme par ✕, par Échap (un second Échap ferme Stats) ou en recliquant sur
+  *Pricing details*, dont le style reflète l'état ouvert. Le focus revient au déclencheur.
+- La Banque de skills (Settings › Skills) partage ce comportement.
 
 ## 1.110.0
 **Onboarding : tour *Overview*** (#911, spec #910, story #909, ADR-0071 §4).

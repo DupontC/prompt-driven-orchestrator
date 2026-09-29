@@ -19,6 +19,14 @@ try {
   // frontend dependencies not installed
 }
 
+// The frames are read back with ffmpeg, like the montage encodes them.
+let ffmpeg = true;
+try {
+  execFileSync("ffmpeg", ["-version"], { stdio: "ignore" });
+} catch {
+  ffmpeg = false;
+}
+
 // The cuts are planned on the recorder's clock and applied to the video: the
 // two must share their 0 even when a scene waits before its first page (a
 // setup call, a pipeline to install). The video starts on the first screencast
@@ -31,7 +39,7 @@ function colorAt(video, t) {
   return [...raw.subarray(0, 3)];
 }
 
-test("the video and the timeline share their 0, even when the scene waits before its first page", { skip: chromium ? false : "run `pnpm install` in frontend/" }, async (t) => {
+test("the video and the timeline share their 0, even when the scene waits before its first page", { skip: !chromium ? "run `pnpm install` in frontend/" : !ffmpeg ? "no ffmpeg on PATH" : false }, async (t) => {
   const videoDir = fs.mkdtempSync(path.join(os.tmpdir(), "readme-media-recorder-"));
   t.after(() => fs.rmSync(videoDir, { recursive: true, force: true }));
   const browser = await chromium.launch();
