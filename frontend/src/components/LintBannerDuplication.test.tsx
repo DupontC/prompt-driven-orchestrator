@@ -1,7 +1,7 @@
 import { describe, it, expect, beforeEach, afterEach, vi } from "vitest";
 import { render, screen } from "@testing-library/react";
 import EditCanvas from "./EditCanvas";
-import PipelineInspector from "./PipelineInspector";
+import PipelineInfoPanel from "./PipelineInfoPanel";
 import { useEditStore } from "../stores/editStore";
 import { TooltipProvider } from "./ui/tooltip";
 
@@ -26,7 +26,7 @@ vi.mock("@xyflow/react", async (importOriginal) => {
   };
 });
 
-// EditCanvas (via usePipelineLibraryState) and PipelineInspector both import the
+// EditCanvas (via usePipelineLibraryState) and PipelineInfoPanel both import the
 // API client; stub the network so nothing fetches on mount.
 vi.mock("../api", () => ({
   fetchAgentProfiles: vi.fn().mockResolvedValue({ profiles: [] }),
@@ -44,7 +44,8 @@ vi.mock("../api", () => ({
 // Seed a tab with NO node selected and a non-empty diagnostics array — the exact
 // state in which the duplicate banner appeared (#63). Pre-fix this co-mount
 // produced two `lint-banner` nodes (canvas overlay + inspector copy); post-fix
-// the canvas overlay is the single home.
+// the canvas overlay is the single home. Since #948 the pipeline's settings live
+// in Pipeline info, so that is the panel co-mounted beside the canvas.
 function seedNoSelectionWithDiagnostics() {
   useEditStore.setState({
     openTabs: [
@@ -103,7 +104,7 @@ afterEach(() => {
 });
 
 describe("LintBanner duplication (#63)", () => {
-  it("renders exactly one lint banner when EditCanvas and PipelineInspector are co-mounted with no node selected", () => {
+  it("renders exactly one lint banner when EditCanvas and Pipeline info are co-mounted with no node selected", () => {
     render(
       <TooltipProvider>
         <EditCanvas
@@ -112,13 +113,17 @@ describe("LintBanner duplication (#63)", () => {
           onLibraryDelete={() => {}}
           onLibraryPipelinesChanged={() => {}}
         />
-        <PipelineInspector />
+        <PipelineInfoPanel
+          run={null}
+          pipeline={useEditStore.getState().openTabs[0].pipeline}
+          onClose={() => {}}
+        />
       </TooltipProvider>,
     );
 
-    // Both panels mounted: the canvas body (stub) and the inspector header.
+    // Both panels mounted: the canvas body (stub) and Pipeline info's settings.
     expect(screen.getByTestId("reactflow-stub")).toBeInTheDocument();
-    expect(screen.getByText("Pipeline Inspector")).toBeInTheDocument();
+    expect(screen.getByTestId("pipeline-meta")).toBeInTheDocument();
 
     // The diagnostics surface exactly once — the floating canvas overlay.
     expect(screen.getAllByTestId("lint-banner")).toHaveLength(1);

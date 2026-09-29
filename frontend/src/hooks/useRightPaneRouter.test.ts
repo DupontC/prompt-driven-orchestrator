@@ -206,6 +206,25 @@ describe("useRightPaneRouter — #385 info auto-close reconciliation", () => {
   });
 });
 
+describe("useRightPaneRouter — rekey keeps Pipeline info open (#948)", () => {
+  it("does not close the info overlay when a renaming Save rekeys the active tab", () => {
+    const setInfoPanelOpen = vi.fn();
+    const { rerender } = renderHook(
+      (args: RightPaneRouterArgs) => useRightPaneRouter(args),
+      { initialProps: baseArgs({ infoPanelOpen: true, editActiveTabId: "demo", setInfoPanelOpen }) },
+    );
+    rerender(
+      baseArgs({
+        infoPanelOpen: true,
+        editActiveTabId: "renamed",
+        tabRekey: { from: "demo", to: "renamed" },
+        setInfoPanelOpen,
+      }),
+    );
+    expect(setInfoPanelOpen).not.toHaveBeenCalled();
+  });
+});
+
 describe("useRightPaneRouter — triggerPromptRequired (#351)", () => {
   it("defaults to true when the flag is absent", () => {
     const { result } = renderHook(() =>

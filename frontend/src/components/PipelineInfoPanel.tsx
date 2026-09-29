@@ -4,6 +4,7 @@ import { SectionHead, SourceDriftChip } from "./InspectorPrimitives";
 import TmuxTerminal from "./TmuxTerminal";
 import DiffTab from "./DiffTab";
 import RepositoriesSection from "./RepositoriesSection";
+import PipelineMetaSections from "./PipelineMetaSections";
 import { deliverySignature } from "../lib/diffTab";
 import { useReviewUnread } from "../hooks/useReviewUnread";
 import { useSourceDrift } from "../hooks/useSourceDrift";
@@ -17,6 +18,7 @@ import { formatDuration, useRunDuration } from "../lib/runDuration";
 import { formatEstCost } from "../lib/costLabel";
 import { serializePipeline } from "../lib/serializePipeline";
 import { highlightYaml } from "./yamlHighlight";
+import { useEditStore } from "../stores/editStore";
 
 export type TabId = "info" | "diff" | "repositories" | "manager" | "yaml" | "assistant";
 
@@ -90,8 +92,6 @@ export default function PipelineInfoPanel({
   onOpenSettings,
 }: Props) {
   const pipelineName = run?.pipeline_name ?? pipeline?.name ?? "Untitled";
-  const variables = pipeline?.variables ?? {};
-  const variableEntries = Object.entries(variables);
   const managerSession = run ? `pdo-mgr-${run.run_id}` : null;
 
   // Manager on demand: the Manager tab shows for EVERY live Run — an empty
@@ -234,7 +234,6 @@ export default function PipelineInfoPanel({
           run={run}
           pipeline={pipeline}
           pipelineName={pipelineName}
-          variables={variableEntries}
           hasAssistant={hasAssistant}
           onOpenDiff={() => selectTab("diff")}
         />
@@ -656,14 +655,12 @@ function InfoTab({
   run,
   pipeline,
   pipelineName,
-  variables,
   hasAssistant,
   onOpenDiff,
 }: {
   run: RunState | null;
   pipeline: PipelineDef | null;
   pipelineName: string;
-  variables: [string, { default: unknown }][];
   hasAssistant: boolean;
   /** #748: the Changes stat is the link to what it counts — the Diff tab. */
   onOpenDiff: () => void;
@@ -793,24 +790,7 @@ function InfoTab({
           >
             {run.status === "archived"
               ? "Archived run · read-only · outputs preserved"
-              : "Editing run-scoped pipeline · changes sync to template"}
-          </div>
-        )}
-
-        {variables.length > 0 && (
-          <div className="mt-3 flex flex-col gap-1" data-testid="info-panel-variables">
-            {variables.map(([name, def]) => (
-              <div
-                key={name}
-                className="flex items-center justify-between rounded bg-bg-3 px-2 py-1"
-                style={{ fontSize: "10.5px" }}
-              >
-                <span className="font-mono text-fg-3">{name}</span>
-                <span className="font-mono text-fg-4">
-                  {formatVariableValue(def.default)}
-                </span>
-              </div>
-            ))}
+              : "Canvas edits sync to template · run settings are read-only"}
           </div>
         )}
       </div>
@@ -833,14 +813,26 @@ function InfoTab({
         </div>
       )}
 
-      {run && (
+      {/* Notion #6 / #948: Pipeline info is the only surface of the pipeline's
+          metadata — editable on a template, read-only on a Run (active or
+          archived). Order: header → Identity → Variables → Canvas → Stats → note. */}
+      {pipeline && <PipelineMetaSections pipeline={pipeline} readOnly={run != null} />}
+
+      {(run || pipeline) && (
         <div
           className="border-b border-line px-3 py-3"
           style={{ fontSize: "11.5px" }}
-          data-testid="run-stats"
+          data-testid="info-stats"
         >
           <SectionHead title="Stats" />
-          <div className="mt-2 flex flex-col gap-1">
+          {pipeline && (
+            <div className="mt-2 flex gap-4 text-fg-4" style={{ fontSize: "10px" }} data-testid="pipeline-graph-stats">
+              <span>{pipeline.nodes.length} nodes</span>
+              <span>{pipeline.edges.length} edges</span>
+            </div>
+          )}
+          {run && (
+          <div className="mt-2 flex flex-col gap-1" data-testid="run-stats">
             <StatRow label="Duration" testid="stat-duration">
               <span className="flex items-center gap-1.5">
                 {durationLabel ?? "—"}
@@ -924,22 +916,14 @@ function InfoTab({
               )}
             </StatRow>
           </div>
+          )}
         </div>
       )}
 
-      <div className="px-3 py-3" style={{ fontSize: "11.5px" }}>
-        <SectionHead title="Description" />
-        <div
-          className="mt-2 text-fg-3"
-          style={{ fontSize: "12px", lineHeight: "1.55" }}
-        >
-          {pipeline?.name
-            ? `Pipeline: ${pipeline.name}`
-            : "No pipeline selected."}
-        </div>
-        {!run && (
+      {!run && (
+        <div className="px-3 py-3" style={{ fontSize: "11.5px" }}>
           <div
-            className="mt-3 flex items-center gap-2 rounded border border-dashed border-line-soft bg-bg-3 px-3 py-2.5 text-fg-4"
+            className="flex items-center gap-2 rounded border border-dashed border-line-soft bg-bg-3 px-3 py-2.5 text-fg-4"
             style={{ fontSize: "11.5px" }}
           >
             <Info size={14} className="shrink-0" />
@@ -949,8 +933,8 @@ function InfoTab({
                 : "No active run. The Manager tab becomes available while a Run is in progress."}
             </span>
           </div>
-        )}
-      </div>
+        </div>
+      )}
     </>
   );
 }
@@ -971,7 +955,15 @@ function YamlTab({
     () => (pipeline ? serializePipeline(pipeline) : ""),
     [pipeline],
   );
+  // The last saved portable document — what Copy / Download export.
   const [yaml, setYaml] = useState(fallbackYaml);
+  // #948: an edit shows here before it is saved. While the active tab holds
+  // unsaved edits the view is the edit buffer serialized (what Save will write);
+  // Copy / Download keep exporting the saved document, refetched once Save lands.
+  const dirty = useEditStore(
+    (s) => s.openTabs.find((t) => t.id === s.activeTabId)?.dirty ?? false,
+  );
+  const shownYaml = dirty ? fallbackYaml : yaml;
   const [copied, setCopied] = useState(false);
   const [copyError, setCopyError] = useState(false);
   const [showExcluded, setShowExcluded] = useState(false);
@@ -987,6 +979,7 @@ function YamlTab({
   }, [pipeline]);
 
   useEffect(() => {
+    if (dirty) return;
     let cancelled = false;
     const request = runId
       ? fetchRunPipelineDocument(runId)
@@ -1003,7 +996,7 @@ function YamlTab({
     return () => {
       cancelled = true;
     };
-  }, [fallbackYaml, pipelineId, runId]);
+  }, [dirty, fallbackYaml, pipelineId, runId]);
 
   useEffect(() => {
     if (scrollToLine == null || !preRef.current) return;
@@ -1114,6 +1107,11 @@ function YamlTab({
             the sidecar <code>{pipelineName}.skills/</code>; import both so the bank recreates them.
           </p>
         )}
+        {dirty && (
+          <p className="mt-1 text-st-await" style={{ fontSize: "10px" }} data-testid="yaml-unsaved-note">
+            Unsaved edits shown. Copy and Download export the last saved document until you Save.
+          </p>
+        )}
         {runId && (
           <p className="mt-1 text-fg-4" style={{ fontSize: "10px" }}>
             This is the pipeline that ran, not the Run. Runtime values are not included.
@@ -1141,14 +1139,8 @@ function YamlTab({
         style={{ fontSize: "11px", lineHeight: "1.6", tabSize: 2 }}
         data-testid="info-yaml-content"
       >
-        {highlightYaml(yaml, scrollToLine)}
+        {highlightYaml(shownYaml, scrollToLine)}
       </pre>
     </div>
   );
-}
-
-function formatVariableValue(value: unknown): string {
-  if (Array.isArray(value)) return `[${value.join(", ")}]`;
-  if (typeof value === "string") return `"${value}"`;
-  return String(value ?? "");
 }

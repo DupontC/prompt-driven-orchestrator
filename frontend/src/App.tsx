@@ -34,7 +34,6 @@ import EditCanvas from "./components/EditCanvas";
 import TabBar from "./components/TabBar";
 import NodeInspector from "./components/NodeInspector";
 import MergeInspector from "./components/MergeInspector";
-import PipelineInspector from "./components/PipelineInspector";
 import PipelineInfoPanel from "./components/PipelineInfoPanel";
 import StartInspector from "./components/StartInspector";
 import EndInspector from "./components/EndInspector";
@@ -342,6 +341,7 @@ export default function App() {
   const editUndo = useEditStore((s) => s.undo);
   const editRedo = useEditStore((s) => s.redo);
   const editActiveTabId = useEditStore((s) => s.activeTabId);
+  const editLastRekey = useEditStore((s) => s.lastRekey);
   const resolveConflict = useEditStore((s) => s.resolveConflict);
   const clearSaveError = useEditStore((s) => s.clearSaveError);
   // #342: a single-tab open/replace parked because it would discard unsaved
@@ -423,6 +423,7 @@ export default function App() {
     useRightPaneRouter({
       selection,
       editActiveTabId,
+      tabRekey: editLastRekey,
       hasEditTab,
       selectedTriggerId,
       setSelectedTriggerId,
@@ -981,9 +982,8 @@ export default function App() {
                       onOpenSettings={() => openSettings({ category: "agents", section: "pipeline-manager" })}
                     />
                   )}
-                {selection.kind === "none" && !isEditingRun && (
-                  <PipelineInspector />
-                )}
+                {/* Notion #6 / #948: an empty selection on a template shows
+                    nothing — its settings live in Pipeline info, opened by `i`. */}
               </>
             ) : (
               <>
