@@ -14,6 +14,8 @@ import { cleanupRuns, openPipelineForEdit, runMultipart } from "./helpers";
 //    (the collapse never overwrites the persisted width).
 // 4. Opening Pipeline info with nothing selected expands it; closing collapses.
 // 5. A Run tab with an empty selection keeps its Run panel on the right.
+// 6. Unfolding re-frames the canvas: the clicked card is never left under the
+//    pane (FP iteration 1).
 
 const PIPELINE_NAME = `e2e-right-pane-${process.pid}-${Date.now()}`;
 const PIPELINE_DIR = path.join(os.homedir(), ".pdo", "pipelines");
@@ -72,6 +74,19 @@ async function selectWorker(page: Page): Promise<void> {
   await page.getByText("worker", { exact: true }).first().click();
 }
 
+/** The card lies fully inside the visible canvas, not under the pane. */
+async function expectCardInFrame(page: Page, id: string): Promise<void> {
+  const canvas = await page.locator(".react-flow").first().boundingBox();
+  expect(canvas).toBeTruthy();
+  await expect
+    .poll(async () => {
+      const card = await page.locator(`.react-flow__node[data-id="${id}"]`).boundingBox();
+      if (!card) return false;
+      return card.x >= canvas!.x - 1 && card.x + card.width <= canvas!.x + canvas!.width + 1;
+    })
+    .toBe(true);
+}
+
 async function clickEmptyCanvas(page: Page): Promise<void> {
   // A corner of the React Flow pane, well away from the three seeded nodes.
   const pane = page.locator(".react-flow__pane");
@@ -102,6 +117,9 @@ test.afterAll(async () => {
 });
 
 test.beforeEach(async ({ page }) => {
+  // The FP's screen size: wide enough that the full-width fit view spreads the
+  // graph past what the unfolded canvas shows.
+  await page.setViewportSize({ width: 1600, height: 900 });
   await page.goto("/");
   await page.evaluate(() => localStorage.removeItem("pdo.layout.run"));
 });
@@ -126,6 +144,10 @@ test("collapses when empty and reopens at the last chosen width, across a reload
     .evaluate((el) => el.getBoundingClientRect().width);
   await selectWorker(page);
   await expectExpandedAt(page, groupWidth * 0.25);
+  // The graph was fit-viewed on the full-width canvas: unfolding keeps it
+  // centred, so its far end does not slide under the pane (FP iteration 1).
+  await expectCardInFrame(page, "worker");
+  await expectCardInFrame(page, "end");
   const initial = await rightWidth(page);
 
   // Widen the pane by dragging its handle 80px to the left.
@@ -146,9 +168,12 @@ test("collapses when empty and reopens at the last chosen width, across a reload
   await expectCollapsed(page);
   expect(await storedRightPct(page)).toBeCloseTo(storedPct!, 1);
 
-  // Back on a node: the pane reopens at the width the user chose.
+  // Back on a node: the pane reopens at the width the user chose, and the
+  // clicked card stays in frame.
   await selectWorker(page);
   await expectExpandedAt(page, widened);
+  await expectCardInFrame(page, "worker");
+  await expectCardInFrame(page, "end");
 
   // The width survives a reload, collapse included.
   await clickEmptyCanvas(page);

@@ -951,6 +951,7 @@ export default function App() {
                   onOpenAssistant={handleOpenAssistant}
                   runState={selectedRun}
                   onSelectRun={handleSelectRun}
+                  rightPaneCollapsed={rightPaneCollapsed}
                 />
               </div>
             ) : (
