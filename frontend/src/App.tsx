@@ -34,7 +34,6 @@ import EditCanvas from "./components/EditCanvas";
 import TabBar from "./components/TabBar";
 import NodeInspector from "./components/NodeInspector";
 import MergeInspector from "./components/MergeInspector";
-import PipelineInspector from "./components/PipelineInspector";
 import PipelineInfoPanel from "./components/PipelineInfoPanel";
 import StartInspector from "./components/StartInspector";
 import EndInspector from "./components/EndInspector";
@@ -981,9 +980,8 @@ export default function App() {
                       onOpenSettings={() => openSettings({ category: "agents", section: "pipeline-manager" })}
                     />
                   )}
-                {selection.kind === "none" && !isEditingRun && (
-                  <PipelineInspector />
-                )}
+                {/* Notion #6 / #948: an empty selection on a template shows
+                    nothing — its settings live in Pipeline info, opened by `i`. */}
               </>
             ) : (
               <>

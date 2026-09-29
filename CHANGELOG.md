@@ -10,6 +10,18 @@ ascendante** : la casse se signale ici et par un bump majeur, jamais en gardant 
 morts. Seule contrainte non négociable — les **données historiques restent lisibles** : un Run
 archivé s'ouvre et se chiffre quelle que soit la version qui a écrit son payload.
 
+## 1.111.0
+**Pipeline info, seule surface des métadonnées d'un pipeline** (#948, spec #947, story Notion #6).
+
+- L'onglet Info de Pipeline info (bouton `i`) porte, sous l'en-tête : Identity (nom, version,
+  Prompt required), Variables (ajout, renommage, type, défaut, suppression), Canvas (grille de
+  câblage Global / S / M / L) et les stats du graphe. Éditable sur une template comme toute
+  édition (onglet dirty, undo, Save) ; en lecture seule sur un Run, actif ou archivé.
+- Le Pipeline Inspector disparaît, avec le bloc « Description » : sur une template, une
+  sélection vide n'affiche plus rien à droite, seul `i` ouvre les réglages du pipeline.
+- L'onglet YAML montre une édition non enregistrée ; Copy et Download exportent toujours le
+  dernier document enregistré.
+
 ## 1.110.0
 **Onboarding : tour *Overview*** (#911, spec #910, story #909, ADR-0071 §4).
 

@@ -23,7 +23,7 @@ export interface RightPaneInputs {
  *                 reclaims the pane from a Trigger by clearing the Trigger
  *                 selection on the next canvas selection / tab switch, NOT through
  *                 this precedence (see the reconciliation effect in App).
- *  3. `editTab` — a node/edge/region selection or the run/pipeline inspector for
+ *  3. `editTab` — a node/edge/region selection or the Run panel for
  *                 the active edit tab.
  *  4. `selectedNode` — the legacy no-tab node detail path.
  *
