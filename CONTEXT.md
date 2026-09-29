@@ -896,7 +896,7 @@ Liste (Runs / Triggers / Library) à gauche, canvas au centre, détail du nœud 
 
 ### Toolbar — bouton info pipeline
 
-L'icône `i` ouvre un panneau **info pipeline** : nom, statut, variables, bouton favoriter. Si la pipeline tourne, le terminal manager y prend la place dominante ; sur une **template** de bibliothèque, un onglet **Assistant** héberge le copilote d'authoring (ADR-0048 / ADR-0051), et un glyphe « agent » dans la toolbar y saute directement (côté run, le même chemin mène au Manager — #302). Realtime via WebSocket : chaque événement de l'event log push une update vers l'UI.
+L'icône `i` ouvre un panneau **info pipeline** : nom, statut, variables, bouton favoriter. Si la pipeline tourne, le terminal manager y prend la place dominante ; sur une **template** de bibliothèque, un onglet **Assistant** héberge le copilote d'authoring (ADR-0048 / ADR-0051), et un glyphe « agent » dans la toolbar y saute directement (côté run, le même chemin mène au Manager — #302). Les deux boutons sont **mutuellement exclusifs** et reflètent l'onglet **affiché** (pas celui d'ouverture) : le glyphe « agent » est actif ssi l'onglet Assistant est affiché, `i` ssi le panneau est ouvert sur un autre onglet. Chacun ferme le panneau quand il est déjà actif, et bascule sur son onglet sinon (story Notion PDO-3). Realtime via WebSocket : chaque événement de l'event log push une update vers l'UI.
 
 ### Status icon par Run
 
