@@ -10,6 +10,17 @@ ascendante** : la casse se signale ici et par un bump majeur, jamais en gardant 
 morts. Seule contrainte non négociable — les **données historiques restent lisibles** : un Run
 archivé s'ouvre et se chiffre quelle que soit la version qui a écrit son payload.
 
+## 1.110.1 — quitter un terminal n'y écrit plus rien (#946)
+**Terminal : fin du saut de ligne à chaque changement de node** (#946, spec #945, story Notion #1).
+
+- Se détacher d'un terminal (changer de node, fermer le Shell de run, recharger la page)
+  n'écrit plus `\n` + `^D` dans la pane. La saisie de Claude Code ne gagne plus une ligne vide
+  à chaque aller-retour, et un shell hébergé (Shell de run, bash, REPL) survit au détachement.
+- Cause : la libération du writer de `portable-pty` écrit « newline + EOF » dans le PTY ; le
+  pont la faisait avant de tuer le client `tmux attach`, qui la relayait. Le pont ne libère
+  désormais le writer qu'une fois le client tué et récupéré. Aucun changement côté front ni
+  dans le protocole WebSocket.
+
 ## 1.110.0
 **Onboarding : tour *Overview*** (#911, spec #910, story #909, ADR-0071 §4).
 

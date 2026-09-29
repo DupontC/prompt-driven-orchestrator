@@ -874,11 +874,6 @@ pub fn ws_text(msg: &Message) -> Option<&str> {
 // value back and still releases the lock — a manual `remove_var` at the end of
 // the test body does neither.
 
-/// Serialises `PDO_SESSION_CAP` between `session_cap_admission.rs` and
-/// `admission_concurrency.rs` — both set it, to different values, and both
-/// assert on the cap they set.
-static SESSION_CAP_LOCK: Mutex<()> = Mutex::new(());
-
 /// Serialises `PDO_GUARD_TIMEOUT_MS` between `guard_dry_run_timeout.rs` and
 /// `trigger_scheduler.rs`.
 static GUARD_TIMEOUT_LOCK: Mutex<()> = Mutex::new(());
@@ -927,15 +922,22 @@ impl Drop for EnvVarGuard {
     }
 }
 
-/// Set `PDO_SESSION_CAP` for the lifetime of the returned guard, excluding any
-/// other test that also wants it.
-#[must_use = "the cap is restored as soon as the guard is dropped"]
-pub fn lock_session_cap(value: impl AsRef<str>) -> EnvVarGuard {
-    EnvVarGuard::acquire(
-        &SESSION_CAP_LOCK,
-        pdo_daemon::admission::SESSION_CAP_ENV,
-        value.as_ref(),
-    )
+/// Cap `daemon`'s concurrent NodeRun sessions through the **stored** tier
+/// (`PUT /settings`), which beats `PDO_SESSION_CAP`.
+///
+/// Never set that env var from a test: it is process-global, and every
+/// `tests/*.rs` file runs as a thread of the one `it` binary. A test that held
+/// it at 2 capped every sibling daemon too — `declared_wait`'s three-level
+/// orchestration then parked its grandchild in `waiting` for good. The stored
+/// cap is per daemon, so a cap test is hermetic and constrains no one else.
+pub async fn set_session_cap(daemon: &TestDaemon, cap: usize) {
+    let resp = reqwest::Client::new()
+        .put(format!("{}/settings", daemon.url()))
+        .json(&serde_json::json!({ "session_cap": cap }))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), 200, "PUT /settings session_cap={cap}");
 }
 
 /// Set `PDO_GUARD_TIMEOUT_MS` for the lifetime of the returned guard, excluding

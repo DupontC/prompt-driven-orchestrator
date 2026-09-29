@@ -6,13 +6,13 @@
 //! Without the admission lock, concurrent spawns all observe the same free slot
 //! and overshoot.
 //!
-//! The cap is set via the process-global `PDO_SESSION_CAP`, which
-//! `session_cap_admission.rs` sets too; both take `common::lock_session_cap` so
-//! they cannot overlap inside the single `it` test binary.
+//! The cap is set per daemon through the stored tier (`common::set_session_cap`),
+//! never via the process-global `PDO_SESSION_CAP`, which would cap every sibling
+//! test of the single `it` binary too.
 
 use std::time::Duration;
 
-use crate::common::{lock_session_cap, TestDaemon};
+use crate::common::{set_session_cap, TestDaemon};
 
 const CAP: usize = 2;
 const RUNS: usize = 8;
@@ -121,11 +121,10 @@ async fn count_running_nodes(daemon_url: &str, run_ids: &[String]) -> usize {
 
 #[tokio::test]
 async fn concurrent_spawns_never_exceed_the_cap() {
-    let _cap = lock_session_cap(CAP.to_string());
-
     // `TestDaemon::spawn` seeds a harmless `sleep` override per-daemon, so an
     // admitted node keeps holding its slot (never exits) for the duration.
     let daemon = TestDaemon::spawn(seed).await.unwrap();
+    set_session_cap(&daemon, CAP).await;
     let url = daemon.url();
     // #470: every Run must name its target repo — the daemon root, explicitly.
     let target_repo = daemon.target_repo();

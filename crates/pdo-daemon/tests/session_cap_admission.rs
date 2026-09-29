@@ -1,7 +1,7 @@
 //! Layer 3a — admission control / global session cap (#159).
 //!
 //! Proves the daemon-wide cap on concurrent NodeRun sessions: with the cap set
-//! to 1 via `PDO_SESSION_CAP`, a node in a second Run that cannot get a slot
+//! to 1, a node in a second Run that cannot get a slot
 //! enters the `waiting` state and is spawned once the first Run's node frees its
 //! slot. Manager sessions are exempt by construction — each Run spawns a manager
 //! yet the single node still wins the only slot, so a cap of 1 would be
@@ -10,14 +10,14 @@
 //! Node *state* (running vs waiting) is projected from the event log, so the
 //! assertions do not depend on a real tmux server being present; the per-daemon
 //! `tmux_cmd_override` (seeded by `TestDaemon::spawn`) just keeps a missing
-//! `claude` binary from polluting logs. The session cap is still set via the
-//! process-global `PDO_SESSION_CAP`, and `admission_concurrency.rs` sets it too
-//! — every `tests/*.rs` file compiles into the one `it` binary, so both take
-//! `common::lock_session_cap` rather than racing.
+//! `claude` binary from polluting logs. The session cap is set per daemon
+//! through the stored tier (`common::set_session_cap`), never via the
+//! process-global `PDO_SESSION_CAP`: every `tests/*.rs` file compiles into the
+//! one `it` binary, so the env var would cap every sibling test too.
 
 use std::time::Duration;
 
-use crate::common::{lock_session_cap, TestDaemon};
+use crate::common::{set_session_cap, TestDaemon};
 
 const PIPELINE_NAME: &str = "cap-solo";
 const NODE_ID: &str = "solo";
@@ -135,14 +135,11 @@ async fn wait_for_status(daemon: &TestDaemon, run_id: &str, want: &str) -> Optio
 
 #[tokio::test]
 async fn over_cap_node_waits_then_starts_when_a_slot_frees() {
-    // Cap the whole daemon to a single live NodeRun session. The guard holds the
-    // shared lock for the whole test and restores the previous value on drop —
-    // on a panic too, which a trailing `remove_var` would not.
-    let _cap = lock_session_cap("1");
-
     // `TestDaemon::spawn` seeds a harmless `sleep` override per-daemon, so node
     // sessions stay alive (occupying slots) without needing real `claude`.
     let daemon = TestDaemon::spawn(seed).await.unwrap();
+    // Cap this daemon to a single live NodeRun session.
+    set_session_cap(&daemon, 1).await;
 
     // Run 1: its solo node takes the only slot.
     let run1 = create_run(&daemon).await;

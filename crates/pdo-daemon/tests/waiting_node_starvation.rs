@@ -24,7 +24,7 @@
 
 use std::time::Duration;
 
-use crate::common::TestDaemon;
+use crate::common::{set_session_cap, TestDaemon};
 use pdo_daemon::tmux_session_manager;
 
 const PIPELINE_NAME: &str = "starve";
@@ -113,16 +113,6 @@ fn git_init_with_commit(repo: &std::path::Path) -> anyhow::Result<()> {
     run(&["add", "."])?;
     run(&["commit", "-q", "-m", "init"])?;
     Ok(())
-}
-
-async fn set_session_cap(daemon: &TestDaemon, cap: u32) {
-    let resp = reqwest::Client::new()
-        .put(format!("{}/settings", daemon.url()))
-        .json(&serde_json::json!({ "session_cap": cap }))
-        .send()
-        .await
-        .unwrap();
-    assert_eq!(resp.status(), 200, "PUT /settings session_cap={cap}");
 }
 
 async fn create_run(daemon: &TestDaemon) -> String {
