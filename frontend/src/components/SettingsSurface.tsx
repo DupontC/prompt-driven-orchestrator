@@ -7,8 +7,8 @@ import {
   useState,
   type ReactNode,
 } from "react";
-import { Check, Copy, Download, ExternalLink, FileText, RefreshCw, TriangleAlert, X } from "lucide-react";
-import FullWindowShell from "./FullWindowShell";
+import { Check, Copy, Download, ExternalLink, FileText, RefreshCw, TriangleAlert } from "lucide-react";
+import FullWindowShell, { type ShellDrawer } from "./FullWindowShell";
 import { announceSettingsChanged, useSettings } from "../hooks/useSettings";
 import { useUpdateStatus } from "../hooks/useUpdateStatus";
 import { checkForUpdateNow, fetchUpdateAttemptLog, updateSettings } from "../api";
@@ -593,19 +593,30 @@ export default function SettingsSurface({
     </div>
   );
 
-  const drawerNode = drawer ? (
-    <SettingsDrawer onClose={() => setDrawer(null)}>
-      <SkillBankPanel
-        bank={skillBank}
-        loaded={skillsLoaded}
-        home={settings?.home ?? null}
-        onChanged={async () => {
-          await refreshSkills();
-          announceSkillsChanged();
-        }}
-      />
-    </SettingsDrawer>
-  ) : null;
+  // The skill bank in the shell's secondary panel (#690 decision 5, framed by the shell
+  // since #944): the rail stays visible, Escape returns to Settings › Skills first, and the
+  // Save footer hides under it so its own writes and Save are never both in view.
+  const shellDrawer: ShellDrawer | null = drawer
+    ? {
+        title: "Skill bank",
+        escHint: "saves as you go · Esc returns to Settings",
+        widthClassName: "w-[min(880px,90vw)]",
+        testId: "settings-drawer",
+        dataAttributes: { "data-drawer": drawer },
+        onClose: () => setDrawer(null),
+        content: (
+          <SkillBankPanel
+            bank={skillBank}
+            loaded={skillsLoaded}
+            home={settings?.home ?? null}
+            onChanged={async () => {
+              await refreshSkills();
+              announceSkillsChanged();
+            }}
+          />
+        ),
+      }
+    : null;
 
   const loading = (
     <div
@@ -643,7 +654,7 @@ export default function SettingsSurface({
           </span>
         }
         footer={footer}
-        drawer={drawerNode}
+        drawer={shellDrawer}
       >
         {SETTINGS_CATEGORIES.map((item) => (
           <CategoryPage
@@ -2071,43 +2082,8 @@ function HarnessDescriptorRows({ settings }: { settings: InstanceSettings }) {
 }
 
 /* ------------------------------------------------------------------------------------ */
-/* Drawer + confirm                                                                      */
+/* Confirm                                                                               */
 /* ------------------------------------------------------------------------------------ */
-
-/**
- * The shell's right drawer hosting the skill bank (#690 decision 5, kept by #691 for this
- * one panel): the rail stays visible, Escape returns to Settings › Skills first, and the
- * Save footer hides under it so its own writes and Save are never both in view.
- */
-function SettingsDrawer({ onClose, children }: { onClose: () => void; children: ReactNode }) {
-  const kind: DrawerKind = "skills";
-  return (
-    <aside
-      className="absolute bottom-0 right-0 top-14 z-20 flex w-[min(880px,90vw)] flex-col border-l border-line bg-bg-4 shadow-2xl"
-      data-testid="settings-drawer"
-      data-drawer={kind}
-    >
-      <div className="flex items-center gap-3 border-b border-line px-4 py-3">
-        <h3 className="font-semibold text-fg" style={{ fontSize: "13px" }}>
-          Skill bank
-        </h3>
-        <span className="ml-auto text-fg-4" style={{ fontSize: "10.5px" }}>
-          saves as you go · Esc returns to Settings
-        </span>
-        <button
-          type="button"
-          onClick={onClose}
-          aria-label="Close panel"
-          data-testid="settings-drawer-close"
-          className="grid h-6 w-6 shrink-0 place-items-center rounded text-fg-3 transition-colors hover:bg-bg-5 hover:text-fg"
-        >
-          <X size={14} />
-        </button>
-      </div>
-      <div className="flex min-h-0 flex-1 flex-col overflow-y-auto">{children}</div>
-    </aside>
-  );
-}
 
 function ConfirmCloseDialog({
   rollup,
