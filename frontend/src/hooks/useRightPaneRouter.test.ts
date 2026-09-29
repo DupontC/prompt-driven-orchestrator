@@ -331,3 +331,53 @@ describe("useRightPaneRouter — runNode synthesis (#204)", () => {
     expect(result.current.runNode).toBeNull();
   });
 });
+
+describe("useRightPaneRouter — collapsed right pane (#949)", () => {
+  const collapsed = (over: Partial<RightPaneRouterArgs>) =>
+    renderHook(() => useRightPaneRouter(baseArgs(over))).result.current.collapsed;
+
+  it("collapses on the home screen", () => {
+    expect(collapsed({})).toBe(true);
+  });
+
+  it("collapses on a template tab with nothing selected and info closed", () => {
+    expect(collapsed({ hasEditTab: true, editActiveTabId: "p1" })).toBe(true);
+  });
+
+  it("opens for Pipeline info and for a node selection on a template", () => {
+    expect(
+      collapsed({ hasEditTab: true, editActiveTabId: "p1", infoPanelOpen: true }),
+    ).toBe(false);
+    expect(
+      collapsed({ hasEditTab: true, editActiveTabId: "p1", selection: nodeSel("n1") }),
+    ).toBe(false);
+  });
+
+  it("opens for a selected Trigger", () => {
+    expect(
+      collapsed({ selectedTriggerId: "t1", triggers: [trigger("t1", "p1")] }),
+    ).toBe(false);
+  });
+
+  it("keeps the Run panel on a Run tab with an empty selection", () => {
+    expect(
+      collapsed({
+        hasEditTab: true,
+        editActiveTabId: "r1",
+        isRunTab: true,
+        selectedRun: makeRun({}),
+      }),
+    ).toBe(false);
+  });
+
+  it("keeps the no-tab path open for an archived Run or a selected run node", () => {
+    expect(collapsed({ selectedRun: makeRun({ status: "archived" }) })).toBe(false);
+    expect(
+      collapsed({
+        selectedRun: makeRun({ nodes: { n1: {} as never } }),
+        selectedNodeId: "n1",
+      }),
+    ).toBe(false);
+    expect(collapsed({ selectedRun: makeRun({}) })).toBe(true);
+  });
+});
