@@ -17,8 +17,10 @@ import { formatDuration, useRunDuration } from "../lib/runDuration";
 import { formatEstCost } from "../lib/costLabel";
 import { serializePipeline } from "../lib/serializePipeline";
 import { highlightYaml } from "./yamlHighlight";
+import { resolveInfoTab } from "../lib/infoPanelReconcile";
+import type { TabId } from "../lib/infoPanelReconcile";
 
-export type TabId = "info" | "diff" | "repositories" | "manager" | "yaml" | "assistant";
+export type { TabId };
 
 function StatRow({
   label,
@@ -49,7 +51,13 @@ interface Props {
   /** @deprecated Instance pipelines refresh through the edit store. */
   onLibraryChanged?: () => void;
   onClose: () => void;
+  /** Uncontrolled: the tab the panel opens on (Info by default). */
   initialTab?: TabId;
+  /** Controlled (#938): the requested tab, owned by the host — which lights the
+   *  toolbar buttons from the same `resolveInfoTab`. Pair with `onTabChange`. */
+  tab?: TabId;
+  /** Called when the user picks a tab (both modes). */
+  onTabChange?: (tab: TabId) => void;
   scrollToLine?: number;
   /** Library pipeline id of the active edit tab (#302 / ADR-0048). Present only
    *  for a library template tab (not a live Run); `null`/absent hides the
@@ -84,6 +92,8 @@ export default function PipelineInfoPanel({
   pipeline,
   onClose,
   initialTab,
+  tab,
+  onTabChange,
   scrollToLine,
   assistantId,
   onRefreshRun,
@@ -104,12 +114,9 @@ export default function PipelineInfoPanel({
   // library *template* (no live Run) with a resolvable pipeline id. Manager and
   // Assistant are therefore never both shown.
   const hasAssistant = !run && !!assistantId;
-  const [activeTab, setActiveTab] = useState<TabId>(initialTab ?? "info");
-  const resolvedTab =
-    ((activeTab === "manager" || activeTab === "diff" || activeTab === "repositories") && !run) ||
-    (activeTab === "assistant" && !hasAssistant)
-      ? "info"
-      : activeTab;
+  const [ownTab, setOwnTab] = useState<TabId>(initialTab ?? "info");
+  const activeTab = tab ?? ownTab;
+  const resolvedTab = resolveInfoTab(activeTab, { hasRun: run != null, hasAssistant });
 
   // #748: the Diff tab's expand/collapse state, keyed by file path, lives here so
   // it survives `Info ↔ Diff` and a "Diff changed · Reload". Reset per Run.
@@ -131,7 +138,8 @@ export default function PipelineInfoPanel({
   const [seenDeliverySig, setSeenDeliverySig] = useState(deliverySig);
   const selectTab = (id: TabId) => {
     if (id === "diff" || resolvedTab === "diff") setSeenDeliverySig(deliverySig);
-    setActiveTab(id);
+    if (tab === undefined) setOwnTab(id);
+    onTabChange?.(id);
   };
   const nudgeDiff =
     run != null && resolvedTab !== "diff" && seenDeliverySig !== deliverySig && deliverySig !== "";

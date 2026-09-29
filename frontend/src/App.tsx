@@ -30,6 +30,7 @@ import SaveErrorModal from "./components/SaveErrorModal";
 import ConfirmCloseTabsModal from "./components/ConfirmCloseTabsModal";
 import { useRecentReposStore } from "./stores/recentReposStore";
 import type { TabId } from "./components/PipelineInfoPanel";
+import { infoPanelButtons, toggleAssistantTab, toggleInfoTab } from "./lib/infoPanelReconcile";
 import EditCanvas from "./components/EditCanvas";
 import TabBar from "./components/TabBar";
 import NodeInspector from "./components/NodeInspector";
@@ -328,7 +329,9 @@ export default function App() {
   // panel refetches its fire history (it otherwise only fetches on trigger.id).
   const [firesRefreshKey, setFiresRefreshKey] = useState(0);
   const [infoPanelOpen, setInfoPanelOpen] = useState(false);
-  const [infoPanelInitialTab, setInfoPanelInitialTab] = useState<TabId | undefined>(undefined);
+  // #938: the panel's tab is App-owned (controlled), so the toolbar lights its
+  // two buttons from the tab actually shown — never from the tab it opened on.
+  const [infoPanelTab, setInfoPanelTab] = useState<TabId>("info");
   const [infoPanelScrollToLine, setInfoPanelScrollToLine] = useState<number | undefined>(undefined);
   const mountedRef = useRef(false);
   const reloadPipeline = useEditStore((s) => s.reloadPipeline);
@@ -571,29 +574,44 @@ export default function App() {
     }
   }
 
-  const handleToggleInfo = useCallback(() => {
-    setInfoPanelOpen((prev) => {
-      if (!prev) {
-        setInfoPanelInitialTab(undefined);
-        setInfoPanelScrollToLine(undefined);
-      }
-      return !prev;
-    });
-  }, []);
+  // #938 (story PDO-3): the "agent" glyph and `(i)` are mutually exclusive, lit
+  // from the RESOLVED tab of the panel (`resolveInfoTab`, the rule the panel
+  // renders with). Each closes the panel when it is the lit one, otherwise
+  // opens — or switches — the panel on its own tab.
+  const infoPanelRun = isEditingRun ? selectedRun : null;
+  const infoHasRun = infoPanelRun != null;
+  const infoHasAssistant = !infoHasRun && !!assistantId;
+  const { assistantActive, infoActive } = infoPanelButtons(
+    { open: infoPanelOpen, tab: infoPanelTab },
+    { hasRun: infoHasRun, hasAssistant: infoHasAssistant },
+  );
+
+  const applyInfoToggle = useCallback(
+    (toggle: typeof toggleInfoTab) => {
+      const next = toggle(
+        { open: infoPanelOpen, tab: infoPanelTab },
+        { hasRun: infoHasRun, hasAssistant: infoHasAssistant },
+      );
+      setInfoPanelTab(next.tab);
+      setInfoPanelScrollToLine(undefined);
+      setInfoPanelOpen(next.open);
+    },
+    [infoPanelOpen, infoPanelTab, infoHasRun, infoHasAssistant],
+  );
+
+  const handleToggleInfo = useCallback(() => applyInfoToggle(toggleInfoTab), [applyInfoToggle]);
 
   const handleCloseInfo = useCallback(() => {
     setInfoPanelOpen(false);
   }, []);
 
-  // #302 / ADR-0048: the toolbar Bot glyph opens the info panel focused on the
-  // Assistant tab (the library authoring copilot). Same shape as `handleViewYaml`:
-  // set the initial tab, then open. The panel is keyed on `infoPanelInitialTab`,
-  // so this remounts it at the Assistant tab.
-  const handleOpenAssistant = useCallback(() => {
-    setInfoPanelInitialTab("assistant");
-    setInfoPanelScrollToLine(undefined);
-    setInfoPanelOpen(true);
-  }, []);
+  // #302 / ADR-0048: the toolbar Bot glyph toggles the info panel on the
+  // Assistant tab (the library authoring copilot). No remount (#938): the
+  // controlled tab just moves, so the Assistant keeps its conversation.
+  const handleToggleAssistant = useCallback(
+    () => applyInfoToggle(toggleAssistantTab),
+    [applyInfoToggle],
+  );
 
   useEffect(() => {
     if (!mountedRef.current) {
@@ -816,7 +834,7 @@ export default function App() {
 
   const handleViewYaml = useCallback(() => {
     if (!saveErrorTab) return;
-    setInfoPanelInitialTab("yaml");
+    setInfoPanelTab("yaml");
     setInfoPanelScrollToLine(saveErrorTab.saveError?.line);
     setInfoPanelOpen(true);
     clearSaveError(saveErrorTab.id);
@@ -887,11 +905,11 @@ export default function App() {
                     await delLib(name);
                     refreshLibrary();
                   }}
-                  infoOpen={infoPanelOpen}
+                  infoOpen={infoActive}
                   onToggleInfo={handleToggleInfo}
                   onCloseInfo={handleCloseInfo}
-                  assistantActive={infoPanelOpen && infoPanelInitialTab === "assistant"}
-                  onOpenAssistant={handleOpenAssistant}
+                  assistantActive={assistantActive}
+                  onOpenAssistant={handleToggleAssistant}
                   runState={selectedRun}
                   onSelectRun={handleSelectRun}
                 />
@@ -916,11 +934,11 @@ export default function App() {
               />
             ) : paneOwner === "info" ? (
               <PipelineInfoPanel
-                key={infoPanelInitialTab ?? "default"}
-                run={isEditingRun ? selectedRun : null}
+                run={infoPanelRun}
                 pipeline={editTab?.pipeline ?? null}
                 onClose={handleCloseInfo}
-                initialTab={infoPanelInitialTab}
+                tab={infoPanelTab}
+                onTabChange={setInfoPanelTab}
                 scrollToLine={infoPanelScrollToLine}
                 assistantId={assistantId}
                 onRefreshRun={refreshRun}
