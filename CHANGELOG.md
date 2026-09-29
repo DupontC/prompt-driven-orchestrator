@@ -22,7 +22,8 @@ archivé s'ouvre et se chiffre quelle que soit la version qui a écrit son paylo
 - L'onglet YAML montre une édition non enregistrée ; Copy et Download exportent toujours le
   dernier document enregistré.
 - Renommer une variable se tape au clavier : la ligne garde le focus et sa place. Un nom vide
-  ou déjà pris reste local (signalé en rouge) et revient à l'ancien nom à la sortie du champ.
+  ou déjà pris reste local (signalé en rouge) et revient au dernier nom valide à la sortie
+  du champ ; un Undo restaure le nom d'origine.
 - Une variable dont le défaut ne porte pas le type (un `float` qui vaut `3`) s'écrit sous la
   forme explicite `{ type, default }` : son type survit au rechargement.
 - Un Save qui renomme le pipeline laisse Pipeline info ouvert (même onglet, nouvel id).
