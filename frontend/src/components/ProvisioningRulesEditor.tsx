@@ -222,9 +222,18 @@ export default function ProvisioningRulesEditor({
   // preview is known without opening the block — and holds it open: a launch
   // is never blocked by something hidden. The preview callbacks also latch
   // `expanded`, so fixing the conflict does not snap the block shut under the
-  // user's cursor.
+  // user's cursor. A click on the header while blocked is ignored, not stored:
+  // stored, it would replay as a collapse the moment the conflict is fixed.
   const blocked = (visiblePlan?.conflicts.length ?? 0) > 0 || !!visibleError;
   const open = expanded || blocked;
+
+  // The header marker; dropped when the expanded body carries its own
+  // "Resolve against" field (`leading`), which would repeat it just below.
+  const marker = frozenAt
+    ? `🔒 frozen at ${frozenAt} · reused on restart`
+    : open && leading
+      ? null
+      : `Resolve against ${repository || "a repository"}`;
 
   const summary = useMemo(() => {
     let inheritedCount = 0;
@@ -240,9 +249,12 @@ export default function ProvisioningRulesEditor({
       }
     }
     const ownCount = ruleCounts.get(level) ?? 0;
+    // A failed preview cannot vouch for "none": inherited rules may apply,
+    // they just could not be resolved.
+    if (visibleError) return `${ownCount} at this level · inherited unknown`;
     if (inheritedCount === 0 && ownCount === 0) return "none";
     return `${inheritedCount} inherited · ${ownCount} at this level`;
-  }, [visiblePlan, level, ruleCounts, inherited]);
+  }, [visiblePlan, visibleError, level, ruleCounts, inherited]);
 
   const conflictingPatterns = useMemo(() => {
     const result: Record<ProvisioningMode, Set<string>> = {
@@ -336,9 +348,11 @@ export default function ProvisioningRulesEditor({
             type="button"
             aria-expanded={open}
             aria-controls={bodyId}
-            onClick={() => setExpanded(!open)}
+            onClick={() => {
+              if (!blocked) setExpanded(!open);
+            }}
             title={blocked ? "Fix the provisioning issue to collapse" : undefined}
-            className="flex min-w-0 cursor-pointer items-center gap-1 text-left font-medium text-fg"
+            className="flex max-w-full shrink-0 cursor-pointer items-center gap-1 text-left font-medium text-fg"
             data-testid="provisioning-toggle"
           >
             {open ? (
@@ -350,9 +364,11 @@ export default function ProvisioningRulesEditor({
               Provisioning <span className="font-normal text-fg-4">· {summary}</span>
             </span>
           </button>
-          <div className="shrink-0 text-fg-4" style={{ fontSize: 10 }}>
-            {frozenAt ? `🔒 frozen at ${frozenAt} · reused on restart` : `Resolve against ${repository || "a repository"}`}
-          </div>
+          {marker && (
+            <div className="min-w-0 truncate text-right text-fg-4" style={{ fontSize: 10 }} title={marker}>
+              {marker}
+            </div>
+          )}
         </div>
         <div className="mt-0.5 text-fg-4" style={{ fontSize: 10 }}>
           {SUBTITLE}

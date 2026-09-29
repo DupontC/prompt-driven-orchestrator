@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useId, useMemo, useRef, useState } from "react";
 import { ChevronDown, Clock, FolderGit2, GitBranch, Paperclip, Plus, Save, Search, Sparkles, X } from "lucide-react";
 import type { InstanceSettings, PipelineListEntry, Trigger } from "../types";
 import type { TestGuardResponse } from "../api";
@@ -39,6 +39,7 @@ import {
   overLimitIndices,
 } from "../lib/attachments";
 import ProvisioningRulesEditor from "./ProvisioningRulesEditor";
+import { Tooltip, TooltipProvider } from "./ui/tooltip";
 import { EMPTY_PROVISIONING_RULES, hasProvisioningRules } from "../lib/provisioning";
 import type { ProvisioningRules } from "../types";
 
@@ -165,6 +166,7 @@ export default function NewRunModal({ open, onClose, onCreated, openIntent = RUN
   // Notion #7: why provisioning blocks Launch, shown on the disabled button —
   // the (collapsible) block may be scrolled out of view.
   const [provisioningBlockReason, setProvisioningBlockReason] = useState<string | undefined>();
+  const launchReasonId = useId();
   const handleProvisioningValidity = useCallback((valid: boolean, reason?: string) => {
     setProvisioningValid(valid);
     setProvisioningBlockReason(valid ? undefined : reason);
@@ -744,6 +746,8 @@ export default function NewRunModal({ open, onClose, onCreated, openIntent = RUN
     // #465: every non-empty secondary must have resolved before Launch.
     secondariesReady,
   });
+  // Notion #7: the provisioning reason is the one the disabled Launch spells out.
+  const launchBlockReason = provisioningValid ? undefined : provisioningBlockReason;
 
   // The cron the Trigger will be created with: a compiled preset, or the raw escape hatch.
   // Memoized (like `selectedPipeline`/`overrideCount` above) so the compiler can
@@ -1897,17 +1901,34 @@ export default function NewRunModal({ open, onClose, onCreated, openIntent = RUN
             Cancel
           </button>
           {mode === "run" ? (
-            <button
-              onClick={handleLaunch}
-              disabled={submitting || !canLaunch}
-              title={!provisioningValid ? provisioningBlockReason : undefined}
-              className="flex items-center gap-1.5 rounded-md bg-acc px-3 py-1.5 font-medium text-on-acc transition-colors hover:bg-acc-dim disabled:opacity-40"
-              style={{ fontSize: "11.5px" }}
-              data-testid="launch-button"
-            >
-              <Sparkles size={12} />
-              {submitting ? (attachments.length > 0 ? "Uploading…" : "Launching…") : "Launch"}
-            </button>
+            // A disabled button takes no focus nor hover: the reason hangs on a
+            // wrapper, focusable only while provisioning blocks the launch.
+            <TooltipProvider>
+              <Tooltip content={launchBlockReason ?? ""} side="top" disabled={!launchBlockReason}>
+                <span
+                  tabIndex={launchBlockReason ? 0 : undefined}
+                  className="inline-flex rounded-md"
+                  data-testid="launch-button-wrapper"
+                >
+                  <button
+                    onClick={handleLaunch}
+                    disabled={submitting || !canLaunch}
+                    aria-describedby={launchBlockReason ? launchReasonId : undefined}
+                    className="flex items-center gap-1.5 rounded-md bg-acc px-3 py-1.5 font-medium text-on-acc transition-colors hover:bg-acc-dim disabled:opacity-40"
+                    style={{ fontSize: "11.5px" }}
+                    data-testid="launch-button"
+                  >
+                    <Sparkles size={12} />
+                    {submitting ? (attachments.length > 0 ? "Uploading…" : "Launching…") : "Launch"}
+                  </button>
+                  {launchBlockReason && (
+                    <span id={launchReasonId} className="sr-only">
+                      {launchBlockReason}
+                    </span>
+                  )}
+                </span>
+              </Tooltip>
+            </TooltipProvider>
           ) : (
             <button
               onClick={handleCreateTrigger}

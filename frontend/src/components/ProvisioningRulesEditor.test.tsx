@@ -470,6 +470,56 @@ describe("ProvisioningRulesEditor", () => {
         false,
         "Provisioning preview failed: not a git repository",
       );
+      // Unresolved inherited rules: the summary does not claim "none".
+      expect(toggle()).toHaveTextContent("Provisioning · 0 at this level · inherited unknown");
+    });
+
+    it("stays open once the conflict is fixed, even if the header was clicked meanwhile", async () => {
+      vi.mocked(previewProvisioning).mockImplementation(async (_repo, _level, rules) => ({
+        entries: [],
+        rules: [],
+        conflicts:
+          rules.copy.includes(".env") && rules.symlink.includes(".env")
+            ? [{ scope: "run", relative_path: ".env", modes: ["copy", "symlink"] }]
+            : [],
+      }));
+      function Host() {
+        const [rules, setRules] = useState<ProvisioningRules>({
+          copy: [".env"],
+          hardlink: [],
+          symlink: [".env"],
+        });
+        return (
+          <ProvisioningRulesEditor level="run" repository="/repo" rules={rules} onChange={setRules} />
+        );
+      }
+      render(<Host />);
+
+      await waitFor(() => expect(toggle()).toHaveAttribute("aria-expanded", "true"));
+      // Ignored while blocked — and not replayed as a collapse later.
+      await userEvent.click(toggle());
+      await userEvent.clear(screen.getByLabelText("Symlink patterns"));
+
+      await waitFor(() => expect(screen.queryByRole("alert")).not.toBeInTheDocument());
+      expect(toggle()).toHaveAttribute("aria-expanded", "true");
+      expect(screen.getByLabelText("Symlink patterns")).toHaveFocus();
+    });
+
+    it("drops the header 'Resolve against' marker while the body shows its own field", async () => {
+      render(
+        <ProvisioningRulesEditor
+          level="project"
+          repository="/repo"
+          rules={EMPTY}
+          onChange={() => {}}
+          leading={<span>leading slot</span>}
+        />,
+      );
+
+      expect(screen.getByText("Resolve against /repo")).toBeInTheDocument();
+      await userEvent.click(toggle());
+      expect(screen.getByText("leading slot")).toBeInTheDocument();
+      expect(screen.queryByText("Resolve against /repo")).not.toBeInTheDocument();
     });
 
     it("explains each mode and the level strip in keyboard-reachable tooltips", async () => {

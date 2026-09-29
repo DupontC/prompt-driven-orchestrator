@@ -1,5 +1,5 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
-import { render, screen, fireEvent, waitFor, within } from "@testing-library/react";
+import { act, render, screen, fireEvent, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import NewRunModal from "./NewRunModal";
 import { mergeAttachments, overLimitIndices } from "../lib/attachments";
@@ -1214,7 +1214,7 @@ describe("NewRunModal — form persistence across close/reopen", () => {
     await enterValidRepo();
     vi.useRealTimers();
     await waitFor(() => expect(screen.getByTestId("launch-button")).toBeEnabled());
-    expect(screen.getByTestId("launch-button")).not.toHaveAttribute("title");
+    expect(screen.getByTestId("launch-button-wrapper")).not.toHaveAttribute("tabindex");
 
     const toggle = screen.getByRole("button", { name: /^Provisioning/ });
     expect(toggle).toHaveAttribute("aria-expanded", "false");
@@ -1223,15 +1223,22 @@ describe("NewRunModal — form persistence across close/reopen", () => {
     fireEvent.change(screen.getByLabelText("Symlink patterns"), { target: { value: ".env" } });
 
     await waitFor(() => expect(screen.getByTestId("launch-button")).toBeDisabled());
-    expect(screen.getByTestId("launch-button")).toHaveAttribute(
-      "title",
+    expect(screen.getByTestId("launch-button")).toHaveAccessibleDescription(
       "Provisioning has a mode conflict",
     );
     expect(toggle).toHaveAttribute("aria-expanded", "true");
+    // The disabled button takes no focus: its wrapper does, and shows the reason.
+    act(() => screen.getByTestId("launch-button-wrapper").focus());
+    await waitFor(() =>
+      expect(screen.getByTestId("tooltip-content")).toHaveTextContent(
+        "Provisioning has a mode conflict",
+      ),
+    );
 
     fireEvent.change(screen.getByLabelText("Symlink patterns"), { target: { value: "" } });
     await waitFor(() => expect(screen.getByTestId("launch-button")).toBeEnabled());
-    expect(screen.getByTestId("launch-button")).not.toHaveAttribute("title");
+    expect(screen.getByTestId("launch-button")).not.toHaveAccessibleDescription();
+    expect(screen.getByTestId("launch-button-wrapper")).not.toHaveAttribute("tabindex");
     vi.mocked(previewProvisioning).mockReset();
     vi.mocked(previewProvisioning).mockResolvedValue({ entries: [], rules: [], conflicts: [] });
   });

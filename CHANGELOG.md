@@ -21,10 +21,17 @@ PDO Dojo n° 7, contrat ADR-0061 inchangé).
   sous-titre explique à quoi sert le provisioning. L'aperçu tourne même replié.
 - Infobulles (Radix, atteignables au clavier) sur Copy, Hardlink, Symlink et sur la bande de
   niveaux (héritage Instance → Project → Run → Node).
-- Un conflit de modes ou une erreur d'aperçu ouvre le bloc tout seul ; dans New Run, le bouton
-  Launch grisé en donne la raison au survol (« Provisioning has a mode conflict »).
+- Un conflit de modes ou une erreur d'aperçu ouvre le bloc tout seul et le garde ouvert (un
+  clic sur l'en-tête pendant le blocage est ignoré, il ne replie pas le bloc après correction).
+  En cas d'erreur d'aperçu, le résumé dit `M at this level · inherited unknown` plutôt que
+  `none`.
+- Dans New Run, le bouton Launch grisé en donne la raison (« Provisioning has a mode
+  conflict » / erreur d'aperçu) dans une infobulle Radix, au survol comme au clavier (le focus
+  va sur un wrapper, le bouton désactivé n'étant pas focalisable).
 - Disparition du bouton « Configure worktree provisioning… » (Projet) et de la bascule
-  « Configure / Hide provisioning » (inspecteur) ; « Resolve against » vit dans le corps déplié.
+  « Configure / Hide provisioning » (inspecteur) ; « Resolve against » vit dans le corps déplié
+  (le rappel « Resolve against … » de l'en-tête s'efface alors, et se tronque au lieu de couper
+  le résumé).
 
 ## 1.110.0
 **Onboarding : tour *Overview*** (#911, spec #910, story #909, ADR-0071 §4).
