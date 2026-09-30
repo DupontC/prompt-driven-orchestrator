@@ -10,6 +10,16 @@ ascendante** : la casse se signale ici et par un bump majeur, jamais en gardant 
 morts. Seule contrainte non négociable — les **données historiques restent lisibles** : un Run
 archivé s'ouvre et se chiffre quelle que soit la version qui a écrit son payload.
 
+## 1.114.0
+**Copier le contenu brut d'un output en un clic** (#965, story Notion PDO-12).
+
+- Un bouton de copie apparaît sur la ligne de port (section Outputs du panneau de détail, au
+  survol ou au focus clavier) et dans le header de la modale d'artefact. Il copie le fichier
+  brut de l'iter affichée, octet pour octet : frontmatter comprise, markdown non rendu, source
+  pour le html. Il marche aussi sur un Run archivé.
+- Retour « Copied! » ou « Copy failed » (raison en infobulle). Aucun bouton sur les outputs
+  image.
+
 ## 1.113.1
 **Terminal : fin du saut de ligne à chaque changement de node** (#946, spec #945, story Notion #1).
 
