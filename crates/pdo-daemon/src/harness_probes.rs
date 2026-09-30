@@ -503,11 +503,35 @@ pub(crate) fn staging_sets() -> Vec<(String, StagingSet)> {
 /// The capabilities of one harness. **Every method defaults to "absent"**
 /// (`None`); an implementation overrides only what its harness can do.
 ///
+/// Where a harness's offered catalogue lives when it is a **file of its home** rather
+/// than an output of its binary (ADR-0056 §1 ter, #961). Resolved by the impure
+/// runner as `$<home_env>` if set, else `<user home>/<home_rel>`, then `/<file>`;
+/// parsed by the harness's reader in [`crate::harness_catalogue`]. An absent file is
+/// an empty catalogue (the harness was never launched), never an error.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) struct CatalogueConfigFile {
+    /// The env var that relocates the whole home (`VIBE_HOME`).
+    pub home_env: &'static str,
+    /// The home dir under the user's `$HOME` when the env var is unset (`.vibe`).
+    pub home_rel: &'static str,
+    /// The file inside that home (`config.toml`).
+    pub file: &'static str,
+}
+
 /// `Sync` so a single `&'static` instance can be handed out from [`probes_for`]
 /// across the daemon's threads (each impl is a stateless zero-sized type).
 pub(crate) trait HarnessProbes: Sync {
     /// Cost source, or `None` (contribute "—" + a reason, never `$0`).
     fn cost_source(&self) -> Option<CostSource> {
+        None
+    }
+    /// The **configuration file of the harness's home** that carries its offered
+    /// catalogue, or `None` (ADR-0056 §1 ter, #961). Declared, never guessed: only a
+    /// first-party harness whose binary enumerates nowhere in its own output but
+    /// reads its models from a file it owns (`vibe`: `[[models]]` of
+    /// `$VIBE_HOME/config.toml`) answers here. A data-declared harness has no file
+    /// looked for.
+    fn catalogue_config_file(&self) -> Option<CatalogueConfigFile> {
         None
     }
     /// What of the model × effort pair the harness's source reports, or `None`
@@ -1051,6 +1075,46 @@ impl HarnessProbes for PiProbes {
 /// The single `pi` instance handed out by [`probes_for`]. Zero-sized.
 static PI_PROBES: PiProbes = PiProbes;
 
+/// The capabilities of `vibe` (Mistral Vibe, #961, story #960; measured on 2.25.8).
+///
+/// First-party, so the picker lists it as **Built-in** and the support table has its
+/// row — and in this ticket **every instrumentation capability is declared absent**,
+/// explicitly (ADR-0051: `None` is a value, not a missing dispatch). Identity,
+/// cost, transcript, context and steering arrive with #962 (ADR-0080: learned
+/// identity), the turn-end hook and the staging set with #963. What it does declare
+/// is where its offered catalogue is read: its own `config.toml` (ADR-0056 §1 ter).
+///
+/// Its exit is no verdict (resident TUI, stays up after a model error), like pi's.
+struct VibeProbes;
+
+impl HarnessProbes for VibeProbes {
+    /// `[[models]]` of `$VIBE_HOME/config.toml` (`~/.vibe` by default) — measured:
+    /// `--help` enumerates nothing and declares no catalogue source.
+    fn catalogue_config_file(&self) -> Option<CatalogueConfigFile> {
+        Some(VIBE_CATALOGUE_CONFIG_FILE)
+    }
+
+    fn exit_code_is_verdict(&self) -> bool {
+        false
+    }
+}
+
+/// vibe's catalogue file (ADR-0056 §1 ter).
+pub(crate) const VIBE_CATALOGUE_CONFIG_FILE: CatalogueConfigFile = CatalogueConfigFile {
+    home_env: "VIBE_HOME",
+    home_rel: ".vibe",
+    file: "config.toml",
+};
+
+/// The single `vibe` instance handed out by [`probes_for`]. Zero-sized.
+static VIBE_PROBES: VibeProbes = VibeProbes;
+
+/// `harness`'s catalogue configuration file, dispatched (ADR-0051): `None` for every
+/// harness that reads its catalogue from its binary's output or nowhere.
+pub(crate) fn catalogue_config_file(harness: &str) -> Option<CatalogueConfigFile> {
+    resolved(harness).catalogue_config_file()
+}
+
 /// The capabilities of a **data-declared** harness (a user's disk descriptor, or
 /// `opencode` in v1): every method inherits the trait's "absent" default. This is
 /// the dispatch target that makes ADR-0051 §2 hold — a harness PDO carries no code
@@ -1273,6 +1337,9 @@ pub(crate) fn probes_for(harness: &str) -> Option<&'static dyn HarnessProbes> {
         // #705/#707: `pi` — first-party; five capabilities present, usage-limit and
         // staging declared absent (the latter until #708).
         harness_registry::PI => Some(&PI_PROBES),
+        // #961: `vibe` — first-party; every instrumentation capability declared
+        // absent in this ticket, its catalogue file declared (ADR-0056 §1 ter).
+        harness_registry::VIBE => Some(&VIBE_PROBES),
         // `opencode` (resident but un-instrumented in v1) and every data-declared
         // harness: no capability. A launch is data; a capability is code (ADR-0045).
         _ => None,
@@ -1367,7 +1434,7 @@ pub(crate) fn staging_set_absence_note(harness: &str) -> Option<String> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::harness_registry::{CLAUDE, COPILOT, OPENCODE, PI};
+    use crate::harness_registry::{CLAUDE, COPILOT, OPENCODE, PI, VIBE};
 
     /// A struct that overrides nothing: the demonstration that **every trait
     /// method defaults to "absent"**. This is the shape of a harness declared in
@@ -1618,6 +1685,53 @@ mod tests {
         // Behaviour is pi's own, never claude's parsers on pi's store.
         assert!(!turn_ended(PI, FIXTURE_CLAUDE_TURN_ENDED));
         assert!(!usage_limit_shown(PI, "wait for limit to reset"));
+    }
+
+    #[test]
+    fn vibe_is_first_party_with_every_capability_declared_absent_but_its_catalogue_file() {
+        // #961 / ADR-0051: `vibe` has probes (first-party) and, in this ticket, answers
+        // "absent" on every instrumentation capability — explicitly, so the support
+        // table says so. The one thing it declares is WHERE its offered catalogue is
+        // read (ADR-0056 §1 ter): its own configuration file under its home.
+        let p = probes_for(VIBE).expect("vibe has probes (first-party)");
+        assert!(p.cost_source().is_none());
+        assert!(p.observed_identity_source().is_none());
+        assert!(p.transcript_resolution().is_none());
+        assert!(p.turn_end_substrate().is_none());
+        assert!(p.usage_limit_anchor().is_none());
+        assert!(p.staging_set().is_none());
+        assert!(p.context_usage_source().is_none());
+        assert!(p.steering_source().is_none());
+        assert_eq!(capabilities(VIBE), Capabilities::NONE);
+        assert!(!can_cost(VIBE));
+        assert!(!can_measure_context(VIBE));
+        assert!(turn_end_absence_note(VIBE).is_some());
+        assert!(staging_set_absence_note(VIBE).is_some());
+        // No substrate ⇒ nothing is ever written for its (non-existent) settings hole,
+        // and never the claude Stop-hook JSON.
+        assert_eq!(turn_end_injection(VIBE), None);
+        assert!(!settings_hole_takes_claude_file(VIBE));
+        // Resident: its exit is no verdict.
+        assert!(!exit_code_is_verdict(VIBE));
+
+        assert_eq!(
+            p.catalogue_config_file(),
+            Some(CatalogueConfigFile {
+                home_env: "VIBE_HOME",
+                home_rel: ".vibe",
+                file: "config.toml",
+            })
+        );
+        // Every other harness declares none: the source is never guessed at.
+        for name in [CLAUDE, PI, COPILOT] {
+            assert!(
+                probes_for(name).unwrap().catalogue_config_file().is_none(),
+                "{name}"
+            );
+        }
+        assert!(catalogue_config_file("opencode").is_none());
+        assert!(catalogue_config_file("some-disk-descriptor").is_none());
+        assert!(catalogue_config_file(VIBE).is_some());
     }
 
     #[test]
