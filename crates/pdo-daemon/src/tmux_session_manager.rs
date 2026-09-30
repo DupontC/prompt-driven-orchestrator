@@ -3385,7 +3385,10 @@ mod tests {
         .unwrap();
 
         let cat = probe_catalogue_for("vibe", "vibe", &path, Some(home.path()), None);
-        assert_eq!(cat.models, vec!["mistral-medium-3.5", "devstral-small", "local"]);
+        assert_eq!(
+            cat.models,
+            vec!["mistral-medium-3.5", "devstral-small", "local"]
+        );
         assert!(cat.efforts.is_empty(), "no effort axis: {cat:?}");
 
         // Same binary, a harness name that declares no file: nothing is read.
@@ -3632,12 +3635,12 @@ mod tests {
             "hygiene constants must survive: {posed}"
         );
         assert!(
-            posed.contains("exec vibe --trust --auto-approve \"$(cat"),
+            posed.contains("exec vibe --legacy-harness --trust --auto-approve \"$(cat"),
             "argv must carry no --model: {posed}"
         );
         // The export precedes the tail so the launched process inherits it.
         let export_at = posed.find("export VIBE_ACTIVE_MODEL=").unwrap();
-        let tail_at = posed.find("exec vibe").unwrap();
+        let tail_at = posed.find("exec vibe --legacy-harness").unwrap();
         assert!(export_at < tail_at, "{posed}");
 
         let unposed = build(None);
@@ -3645,7 +3648,10 @@ mod tests {
             !unposed.contains("VIBE_ACTIVE_MODEL"),
             "no model ⇒ the variable is dropped, never exported empty: {unposed}"
         );
-        assert!(unposed.contains("export VIBE_ENABLE_TELEMETRY=false &&"), "{unposed}");
+        assert!(
+            unposed.contains("export VIBE_ENABLE_TELEMETRY=false &&"),
+            "{unposed}"
+        );
     }
 
     /// #661 — a resumed session gets the same leading PATH export. A resurrected

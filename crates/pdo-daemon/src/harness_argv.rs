@@ -411,7 +411,7 @@ mod tests {
         };
         assert_eq!(
             render(&d.launch, &holes),
-            "exec vibe --trust --auto-approve \"$(cat '/tmp/p.md')\""
+            "exec vibe --legacy-harness --trust --auto-approve \"$(cat '/tmp/p.md')\""
         );
     }
 
@@ -425,7 +425,10 @@ mod tests {
                 ..Default::default()
             },
         );
-        assert!(posed.contains(&("VIBE_ACTIVE_MODEL".to_string(), "devstral-small".to_string())));
+        assert!(posed.contains(&(
+            "VIBE_ACTIVE_MODEL".to_string(),
+            "devstral-small".to_string()
+        )));
 
         let unposed = render_env(&d.env, &EnvHoles::default());
         assert!(unposed.iter().all(|(k, _)| k != "VIBE_ACTIVE_MODEL"));
@@ -437,7 +440,10 @@ mod tests {
             "VIBE_ENABLE_TELEMETRY",
             "VIBE_ASK_CONFIRMATION_ON_EXIT",
         ] {
-            assert!(unposed.iter().any(|(key, v)| key == k && v == "false"), "{k}");
+            assert!(
+                unposed.iter().any(|(key, v)| key == k && v == "false"),
+                "{k}"
+            );
             assert!(posed.iter().any(|(key, v)| key == k && v == "false"), "{k}");
         }
     }
@@ -451,13 +457,13 @@ mod tests {
         };
         assert_eq!(
             render(&d.resume, &holes),
-            "exec vibe --trust --auto-approve --resume 'fa56c7a5-d045-cc1d-3ac0-5eb6beb20945'"
+            "exec vibe --legacy-harness --trust --auto-approve --resume 'fa56c7a5-d045-cc1d-3ac0-5eb6beb20945'"
         );
         // No identity ⇒ no resume flag at all: `-c` follows the last-written session
         // across every working dir (ADR-0080), never a blind continue.
         assert_eq!(
             render(&d.resume, &Holes::default()),
-            "exec vibe --trust --auto-approve"
+            "exec vibe --legacy-harness --trust --auto-approve"
         );
         assert_eq!(d.resume_blind, "");
         assert_eq!(d.resume_by_id, "--resume");

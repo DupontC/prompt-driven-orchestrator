@@ -1724,7 +1724,10 @@ mod tests {
         );
         // Every other harness declares none: the source is never guessed at.
         for name in [CLAUDE, PI, COPILOT] {
-            assert!(probes_for(name).unwrap().catalogue_config_file().is_none(), "{name}");
+            assert!(
+                probes_for(name).unwrap().catalogue_config_file().is_none(),
+                "{name}"
+            );
         }
         assert!(catalogue_config_file("opencode").is_none());
         assert!(catalogue_config_file("some-disk-descriptor").is_none());

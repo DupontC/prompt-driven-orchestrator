@@ -945,8 +945,7 @@ mod tests {
     /// A real `~/.vibe/config.toml` written by vibe 2.25.8 (paths anonymised; the
     /// API key never lives in this file, it lives in `.env`). Three `[[models]]`:
     /// two Mistral-hosted with aliases, one local llama.cpp at price 0.
-    const VIBE_CONFIG: &str =
-        include_str!("../tests/fixtures/catalogue/vibe-2.25.8-config.toml");
+    const VIBE_CONFIG: &str = include_str!("../tests/fixtures/catalogue/vibe-2.25.8-config.toml");
 
     #[test]
     fn vibe_help_declares_no_catalogue_source_at_all() {
@@ -966,7 +965,10 @@ mod tests {
         // `VIBE_ACTIVE_MODEL` takes. File order kept; no effort axis (the per-model
         // `thinking` field is not a launch lever); no context window (vibe has none).
         let cat = parse_vibe_config_toml(VIBE_CONFIG);
-        assert_eq!(cat.models, vec!["mistral-medium-3.5", "devstral-small", "local"]);
+        assert_eq!(
+            cat.models,
+            vec!["mistral-medium-3.5", "devstral-small", "local"]
+        );
         assert!(cat.efforts.is_empty());
         assert!(cat.model_contexts.is_empty());
         assert!(cat.model_efforts.is_empty());
@@ -981,8 +983,14 @@ mod tests {
         );
         assert_eq!(cat.models, vec!["devstral-2", "ignored-no-name"]);
         // Not TOML, or TOML without a `models` array: a declared absence, never an error.
-        assert_eq!(parse_vibe_config_toml("this is = not [ toml"), Catalogue::default());
-        assert_eq!(parse_vibe_config_toml("active_model = \"x\"\n"), Catalogue::default());
+        assert_eq!(
+            parse_vibe_config_toml("this is = not [ toml"),
+            Catalogue::default()
+        );
+        assert_eq!(
+            parse_vibe_config_toml("active_model = \"x\"\n"),
+            Catalogue::default()
+        );
         assert_eq!(parse_vibe_config_toml(""), Catalogue::default());
     }
 

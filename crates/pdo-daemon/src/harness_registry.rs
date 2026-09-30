@@ -426,6 +426,14 @@ pub fn pi() -> HarnessDescriptor {
 /// initial message (`vibe [PROMPT]`), so the harness stays attachable after the turn
 /// (CONTEXT.md § "Harnais agentique", ADR-0012). `-p` is deliberately *not* used: it
 /// exits at turn end (ineligible, ADR-0032). The tokens:
+/// - `--legacy-harness` pins vibe's **session store format**. Measured on 2.25.8
+///   (#961 FP): an interactive session may be routed by a GrowthBook rollout to the
+///   "Unified Harness" backend, whose store (`logs/session/unified/<uuid>/` — RPC
+///   journal, no `config.active_model`, no `stats`) is not the one the #960 grilling
+///   measured and ADR-0080 / #962 read (`session_<ts>_<id>/{meta.json,messages.jsonl}`).
+///   The flag forces the legacy Python harness, so what PDO reads is deterministic.
+///   Watch it at the next validated version: the flag may go when the rollout ends;
+///   the Unified Harness stays out of scope (#960);
 /// - `--trust` trusts the working dir for this invocation only (never persisted to
 ///   `trusted_folders.toml`) — the "dossier de travail approuvé" prerequisite met by
 ///   argv, and what makes vibe read the project's `.vibe/hooks.toml` and
@@ -457,21 +465,38 @@ pub fn vibe() -> HarnessDescriptor {
     HarnessDescriptor {
         name: VIBE.to_string(),
         binary: "vibe".to_string(),
-        launch: ["exec", "vibe", "--trust", "--auto-approve", "{prompt}"]
-            .iter()
-            .map(|s| s.to_string())
-            .collect(),
-        resume: ["exec", "vibe", "--trust", "--auto-approve", "{resume}"]
-            .iter()
-            .map(|s| s.to_string())
-            .collect(),
+        launch: [
+            "exec",
+            "vibe",
+            "--legacy-harness",
+            "--trust",
+            "--auto-approve",
+            "{prompt}",
+        ]
+        .iter()
+        .map(|s| s.to_string())
+        .collect(),
+        resume: [
+            "exec",
+            "vibe",
+            "--legacy-harness",
+            "--trust",
+            "--auto-approve",
+            "{resume}",
+        ]
+        .iter()
+        .map(|s| s.to_string())
+        .collect(),
         resume_by_id: "--resume".to_string(),
         resume_blind: String::new(),
         env: vec![
             ("VIBE_ENABLE_UPDATE_CHECKS".to_string(), "false".to_string()),
             ("VIBE_ENABLE_AUTO_UPDATE".to_string(), "false".to_string()),
             ("VIBE_ENABLE_TELEMETRY".to_string(), "false".to_string()),
-            ("VIBE_ASK_CONFIRMATION_ON_EXIT".to_string(), "false".to_string()),
+            (
+                "VIBE_ASK_CONFIRMATION_ON_EXIT".to_string(),
+                "false".to_string(),
+            ),
             ("VIBE_ACTIVE_MODEL".to_string(), "{model}".to_string()),
         ],
     }
