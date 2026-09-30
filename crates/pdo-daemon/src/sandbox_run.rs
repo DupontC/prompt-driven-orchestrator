@@ -360,6 +360,39 @@ pub(crate) fn pi_sessions_root(
     }
 }
 
+/// The `vibe` sessions store root (#962, ADR-0080): `session_logging.save_dir` of
+/// vibe's `config.toml` when set (vibe writes it **absolute** — measured on 2.25.8 —
+/// and a user may point it anywhere), else `<vibe home>/logs/session`. The vibe home is
+/// `home_override` (the caller's reading of `VIBE_HOME`) else `<home_root>/.vibe`.
+/// Reads one small file: the one impurity of this module, kept at this edge and
+/// mirrored on `probe_catalogue_for` (the same file, the same override rule). Always
+/// the **host** home: `vibe` declares no staging set until #963.
+pub(crate) fn vibe_store_root_with(home_root: &Path, home_override: Option<&Path>) -> PathBuf {
+    let vibe_home = home_override
+        .map(Path::to_path_buf)
+        .unwrap_or_else(|| home_root.join(".vibe"));
+    std::fs::read_to_string(vibe_home.join("config.toml"))
+        .ok()
+        .and_then(|text| text.parse::<toml::Table>().ok())
+        .and_then(|doc| {
+            doc.get("session_logging")?
+                .get("save_dir")?
+                .as_str()
+                .map(str::trim)
+                .filter(|s| !s.is_empty())
+                .map(PathBuf::from)
+        })
+        .unwrap_or_else(|| vibe_home.join("logs").join("session"))
+}
+
+/// [`vibe_store_root_with`] reading `VIBE_HOME` from the daemon's environment.
+pub(crate) fn vibe_store_root(home_root: &Path) -> PathBuf {
+    let over = std::env::var_os("VIBE_HOME")
+        .filter(|v| !v.is_empty())
+        .map(PathBuf::from);
+    vibe_store_root_with(home_root, over.as_deref())
+}
+
 /// The store roots of the reported-cost harnesses (#707): one field per harness, so a
 /// consumer that reads several harnesses' stores threads one value instead of one
 /// root per harness. `copilot` (no staging set) is always the host store; `pi` moves
@@ -373,6 +406,8 @@ pub(crate) struct HarnessStores {
     pub(crate) copilot: PathBuf,
     /// [`pi_store_root`].
     pub(crate) pi: PathBuf,
+    /// [`vibe_store_root`] (#962): host only, `save_dir` honoured.
+    pub(crate) vibe: PathBuf,
 }
 
 impl HarnessStores {
@@ -385,6 +420,7 @@ impl HarnessStores {
         HarnessStores {
             copilot: copilot_store_root(home_root),
             pi: pi_store_root(home_root),
+            vibe: vibe_store_root(home_root),
         }
     }
 
@@ -399,6 +435,7 @@ impl HarnessStores {
         HarnessStores {
             copilot: copilot_store_root(home_root),
             pi: pi_sessions_root(sandboxed, run_id, home_root, sandbox_root),
+            vibe: vibe_store_root(home_root),
         }
     }
 
@@ -413,6 +450,7 @@ impl HarnessStores {
         match harness {
             crate::harness_registry::COPILOT => &self.copilot,
             crate::harness_registry::PI => &self.pi,
+            crate::harness_registry::VIBE => &self.vibe,
             _ => claude_root,
         }
     }
@@ -667,6 +705,53 @@ pub(crate) fn kill_session_best_effort(
 
 #[cfg(test)]
 mod tests {
+
+    /// #962 / ADR-0080: the vibe store root honours `session_logging.save_dir` of the
+    /// vibe home's `config.toml` (vibe writes it absolute), falls back to
+    /// `<vibe home>/logs/session`, and the vibe home follows the `VIBE_HOME` override.
+    #[test]
+    fn vibe_store_root_honours_save_dir_then_the_default_then_the_home_override() {
+        let home = tempfile::tempdir().unwrap();
+        // No config at all: the default under `~/.vibe`.
+        assert_eq!(
+            vibe_store_root_with(home.path(), None),
+            home.path().join(".vibe/logs/session")
+        );
+        // A config without `session_logging`: still the default.
+        std::fs::create_dir_all(home.path().join(".vibe")).unwrap();
+        std::fs::write(
+            home.path().join(".vibe/config.toml"),
+            "active_model = \"x\"\n",
+        )
+        .unwrap();
+        assert_eq!(
+            vibe_store_root_with(home.path(), None),
+            home.path().join(".vibe/logs/session")
+        );
+        // An absolute `save_dir`: honoured verbatim.
+        std::fs::write(
+            home.path().join(".vibe/config.toml"),
+            "[session_logging]\nsave_dir = \"/srv/vibe-sessions\"\nenabled = true\n",
+        )
+        .unwrap();
+        assert_eq!(
+            vibe_store_root_with(home.path(), None),
+            PathBuf::from("/srv/vibe-sessions")
+        );
+        // `VIBE_HOME` relocates the home: its config wins, `~/.vibe` is ignored.
+        let relocated = tempfile::tempdir().unwrap();
+        assert_eq!(
+            vibe_store_root_with(home.path(), Some(relocated.path())),
+            relocated.path().join("logs/session")
+        );
+        // And the struct routes the vibe harness to that root.
+        let stores = HarnessStores::from_home(home.path());
+        assert_eq!(
+            stores.root_for(crate::harness_registry::VIBE, Path::new("/claude")),
+            Path::new("/srv/vibe-sessions")
+        );
+    }
+
     use super::*;
     use std::os::unix::fs::PermissionsExt;
 

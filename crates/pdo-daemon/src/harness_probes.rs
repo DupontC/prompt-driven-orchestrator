@@ -91,6 +91,9 @@ pub(crate) enum CostSource {
 /// The startup event is never this — it is the *requested* fallback, and Stats
 /// always says which of the two it read.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+// The shared `Model` prefix is the point: each variant says WHAT of the model × effort
+// pair the source observes, and the support table reads the variant's label.
+#[allow(clippy::enum_variant_names)]
 pub(crate) enum ObservedIdentitySource {
     /// The source names the model **per message** (claude's transcript); the
     /// effort is never written by the source, so it stays requested.
@@ -100,6 +103,9 @@ pub(crate) enum ObservedIdentitySource {
     /// reasoning effort then in force (#736). The observed values win over the
     /// requested ones and say so (`ModelEffortSlice::effort_observed`).
     ModelAndEffort,
+    /// One model for the whole session — `vibe`'s `config.active_model` (#962); the
+    /// effort stays requested (vibe has no effort axis).
+    ModelPerSession,
 }
 
 /// One observed model × effort identity a harness's source reports **in one
@@ -121,6 +127,9 @@ impl ObservedIdentitySource {
     /// can never describe a mechanism the code no longer dispatches to.
     pub(crate) fn label(self) -> &'static str {
         match self {
+            ObservedIdentitySource::ModelPerSession => {
+                "observed — the session's active model; the effort stays requested"
+            }
             ObservedIdentitySource::ModelPerMessage => {
                 "observed — the model per message; the effort stays requested"
             }
@@ -170,11 +179,19 @@ pub(crate) enum TranscriptResolution {
     /// directory ([`crate::pi_session::resolve_by_id`]), never by newest mtime, so
     /// two nodes sharing a worktree have distinct files structurally.
     PiJsonlById,
+    /// `vibe` (#962, ADR-0080): the session's `meta.json` under the vibe store, keyed
+    /// by the session identity PDO **learned**; the transcript proper is its sibling
+    /// `messages.jsonl`.
+    VibeMetaById,
 }
 
 impl TranscriptResolution {
     pub(crate) fn label(self) -> &'static str {
         match self {
+            TranscriptResolution::VibeMetaById => {
+                "the session folder's meta.json under the vibe store, keyed by the session \
+                 identity PDO learned (first session of the working directory after the spawn)"
+            }
             TranscriptResolution::ClaudeJsonl => "the JSONL transcript, keyed by working directory",
             TranscriptResolution::CopilotEventsJsonl => {
                 "the event journal, keyed by the session identity PDO imposed"
@@ -277,11 +294,17 @@ pub(crate) enum ContextUsageSource {
     /// reader holds it against is the model's context window as `pi --list-models`
     /// publishes it (#705, `Catalogue::model_contexts`).
     PiSessionPeak,
+    /// `vibe` (#962): the session's `stats.context_tokens`, one figure per session.
+    VibeSessionPeak,
 }
 
 impl ContextUsageSource {
     pub(crate) fn label(self) -> &'static str {
         match self {
+            ContextUsageSource::VibeSessionPeak => {
+                "reported — the session's `stats.context_tokens`, an absolute figure (vibe \
+                 publishes no context window per model)"
+            }
             ContextUsageSource::ClaudeTranscriptPeak => {
                 "derived — per-turn token usage from the transcript, deduplicated and maxed"
             }
@@ -318,11 +341,17 @@ pub(crate) enum SteeringSource {
     /// pi's `type:"message"` entries of role `user`, minus the first and the
     /// runtime-prefixed ones — [`crate::steering::pi_steering_count`].
     PiSessionUserMessages,
+    /// `vibe` (#962): `role: user` rows of `messages.jsonl` with `injected: false`.
+    VibeSessionUserMessages,
 }
 
 impl SteeringSource {
     pub(crate) fn label(self) -> &'static str {
         match self {
+            SteeringSource::VibeSessionUserMessages => {
+                "derived — the session's typed user messages (`injected: false`), launch \
+                 prompt excluded"
+            }
             SteeringSource::ClaudeTranscriptTurns => {
                 "derived — typed user turns of the transcript, launch prompt and runtime \
                  messages excluded"
@@ -568,6 +597,13 @@ pub(crate) trait HarnessProbes: Sync {
     /// reason for this harness's Steering, never `0`). #792.
     fn steering_source(&self) -> Option<SteeringSource> {
         None
+    }
+    /// The file [`Self::steering_count`] reads, given the file
+    /// [`Self::resolve_transcript`] resolved. The same file for every harness whose
+    /// session is one file; `vibe` (#962) resolves by `meta.json` (cost, model,
+    /// context) and counts steering in its sibling `messages.jsonl`.
+    fn steering_transcript(&self, transcript: &Path) -> PathBuf {
+        transcript.to_path_buf()
     }
 
     // These are the methods a generic consumer actually calls. The default is
@@ -1094,6 +1130,59 @@ impl HarnessProbes for VibeProbes {
         Some(VIBE_CATALOGUE_CONFIG_FILE)
     }
 
+    /// A **reported** cost (ADR-0052) of constant 1.0: `stats.session_cost` is already
+    /// in dollars, one figure per session (#962).
+    fn cost_source(&self) -> Option<CostSource> {
+        Some(CostSource::ReportedByConstant)
+    }
+    fn observed_identity_source(&self) -> Option<ObservedIdentitySource> {
+        Some(ObservedIdentitySource::ModelPerSession)
+    }
+    fn transcript_resolution(&self) -> Option<TranscriptResolution> {
+        Some(TranscriptResolution::VibeMetaById)
+    }
+    fn context_usage_source(&self) -> Option<ContextUsageSource> {
+        Some(ContextUsageSource::VibeSessionPeak)
+    }
+    fn steering_source(&self) -> Option<SteeringSource> {
+        Some(SteeringSource::VibeSessionUserMessages)
+    }
+
+    /// By the **learned** identity only (ADR-0080): without one there is nothing
+    /// to resolve — never "the newest session of the cwd".
+    fn resolve_transcript(
+        &self,
+        store_root: &Path,
+        _working_dir: &Path,
+        session_id: Option<&str>,
+    ) -> Option<PathBuf> {
+        crate::vibe_session::resolve_by_id(store_root, session_id?)
+    }
+
+    fn steering_transcript(&self, transcript: &Path) -> PathBuf {
+        crate::vibe_session::messages_sibling(transcript)
+    }
+
+    fn context_peak(&self, text: &str) -> Option<u64> {
+        crate::vibe_session::session_peak(text)
+    }
+
+    fn steering_count(&self, text: &str) -> Option<u32> {
+        crate::vibe_session::steering_count(text)
+    }
+
+    /// The session's active model with its provider — one identity per session.
+    fn observed_identities(&self, text: &str) -> Vec<ObservedIdentity> {
+        crate::vibe_session::observed_model(text)
+            .map(|m| ObservedIdentity {
+                model: m.model,
+                effort: None,
+                provider: m.provider,
+            })
+            .into_iter()
+            .collect()
+    }
+
     fn exit_code_is_verdict(&self) -> bool {
         false
     }
@@ -1169,6 +1258,11 @@ pub(crate) fn can_count_steering(harness: &str) -> bool {
 /// `harness`'s steering-message count for one main session's `text`, dispatched
 /// to its implementation (ADR-0051, #792). A harness with no
 /// [`HarnessProbes::steering_source`] answers `None`.
+/// The file `harness` counts steering in, given its resolved transcript (dispatch).
+pub(crate) fn steering_transcript(harness: &str, transcript: &Path) -> PathBuf {
+    resolved(harness).steering_transcript(transcript)
+}
+
 pub(crate) fn steering_count(harness: &str, text: &str) -> Option<u32> {
     resolved(harness).steering_count(text)
 }
@@ -1688,41 +1782,92 @@ mod tests {
     }
 
     #[test]
-    fn vibe_is_first_party_with_every_capability_declared_absent_but_its_catalogue_file() {
-        // #961 / ADR-0051: `vibe` has probes (first-party) and, in this ticket, answers
-        // "absent" on every instrumentation capability — explicitly, so the support
-        // table says so. The one thing it declares is WHERE its offered catalogue is
-        // read (ADR-0056 §1 ter): its own configuration file under its home.
+    fn vibe_is_first_party_reads_by_learned_identity_and_declares_turn_end_limit_and_staging_absent(
+    ) {
+        // #961/#962 / ADR-0051: `vibe` has probes (first-party). Five capabilities
+        // dispatch to ITS reader (`crate::vibe_session`, one figure per session);
+        // three stay explicit `None` until #963 (turn end, staging) or for good
+        // (usage-limit menu). Its offered catalogue comes from its own configuration
+        // file (ADR-0056 §1 ter).
         let p = probes_for(VIBE).expect("vibe has probes (first-party)");
-        assert!(p.cost_source().is_none());
-        assert!(p.observed_identity_source().is_none());
-        assert!(p.transcript_resolution().is_none());
+        assert_eq!(p.cost_source(), Some(CostSource::ReportedByConstant));
+        assert_eq!(
+            p.observed_identity_source(),
+            Some(ObservedIdentitySource::ModelPerSession)
+        );
+        assert_eq!(
+            p.transcript_resolution(),
+            Some(TranscriptResolution::VibeMetaById)
+        );
+        assert_eq!(
+            p.context_usage_source(),
+            Some(ContextUsageSource::VibeSessionPeak)
+        );
+        assert_eq!(
+            p.steering_source(),
+            Some(SteeringSource::VibeSessionUserMessages)
+        );
         assert!(p.turn_end_substrate().is_none());
         assert!(p.usage_limit_anchor().is_none());
         assert!(p.staging_set().is_none());
-        assert!(p.context_usage_source().is_none());
-        assert!(p.steering_source().is_none());
-        assert_eq!(capabilities(VIBE), Capabilities::NONE);
-        assert!(!can_cost(VIBE));
-        assert!(!can_measure_context(VIBE));
+        assert_eq!(
+            capabilities(VIBE),
+            Capabilities {
+                cost: true,
+                transcript: true,
+                turn_end: false,
+                usage_limit: false,
+                staging: false,
+                context_usage: true,
+            }
+        );
+        assert!(can_cost(VIBE));
+        assert!(can_measure_context(VIBE));
+        assert!(can_count_steering(VIBE));
         assert!(turn_end_absence_note(VIBE).is_some());
         assert!(staging_set_absence_note(VIBE).is_some());
-        // No substrate ⇒ nothing is ever written for its (non-existent) settings hole,
-        // and never the claude Stop-hook JSON.
         assert_eq!(turn_end_injection(VIBE), None);
         assert!(!settings_hole_takes_claude_file(VIBE));
-        // Resident: its exit is no verdict.
         assert!(!exit_code_is_verdict(VIBE));
+
+        // Reads go through vibe's own reader, never claude's or pi's parsers.
+        let meta = include_str!("../tests/fixtures/vibe-2.25.8/meta_priced.json");
+        assert_eq!(context_peak(VIBE, meta), Some(5078));
+        let ids = observed_identities(VIBE, meta);
+        assert_eq!(ids.len(), 1);
+        assert_eq!(ids[0].model, "devstral-small");
+        assert_eq!(ids[0].provider.as_deref(), Some("mistral"));
+        assert_eq!(ids[0].effort, None);
+        assert_eq!(
+            steering_count(
+                VIBE,
+                include_str!("../tests/fixtures/vibe-2.25.8/messages_steering.jsonl")
+            ),
+            Some(2)
+        );
+        // Steering is counted in the sibling transcript, not in meta.json.
+        assert_eq!(
+            steering_transcript(VIBE, Path::new("/s/session_x/meta.json")),
+            PathBuf::from("/s/session_x/messages.jsonl")
+        );
+        assert_eq!(
+            steering_transcript(PI, Path::new("/s/a.jsonl")),
+            PathBuf::from("/s/a.jsonl")
+        );
+        // Without a learned identity nothing resolves — never the newest session.
+        assert_eq!(
+            resolve_transcript(VIBE, Path::new("/nowhere"), Path::new("/w"), None),
+            None
+        );
 
         assert_eq!(
             p.catalogue_config_file(),
             Some(CatalogueConfigFile {
                 home_env: "VIBE_HOME",
                 home_rel: ".vibe",
-                file: "config.toml",
+                file: "config.toml"
             })
         );
-        // Every other harness declares none: the source is never guessed at.
         for name in [CLAUDE, PI, COPILOT] {
             assert!(
                 probes_for(name).unwrap().catalogue_config_file().is_none(),
@@ -1730,7 +1875,6 @@ mod tests {
             );
         }
         assert!(catalogue_config_file("opencode").is_none());
-        assert!(catalogue_config_file("some-disk-descriptor").is_none());
         assert!(catalogue_config_file(VIBE).is_some());
     }
 
