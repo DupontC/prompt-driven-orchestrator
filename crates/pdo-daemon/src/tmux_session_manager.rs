@@ -550,7 +550,18 @@ pub fn build_tmux_script(
                     session_id,
                 ),
             };
-            (cmd, NO_ENV, harness.env.clone())
+            // #961 (ADR-0045 as amended): the env block may carry holes too
+            // (`vibe`: `VIBE_ACTIVE_MODEL={model}`). Raw values here — the export
+            // quotes them itself. Identity for a hole-free block (claude, pi).
+            let env = crate::harness_argv::render_env(
+                &harness.env,
+                &crate::harness_argv::EnvHoles {
+                    model: model.unwrap_or_default().to_string(),
+                    effort: effort.unwrap_or_default().to_string(),
+                    session_id: session_id.unwrap_or_default().to_string(),
+                },
+            );
+            (cmd, NO_ENV, env)
         }
     };
 
@@ -675,7 +686,18 @@ fn build_resume_script(
     // re-enters the same container. `--continue` matches its transcript by
     // working-dir path; the container mounts the repo at the same host path, so
     // the path (hence the transcript) still matches.
-    let harness_env = descriptor.env.clone();
+    // #961: no model is threaded through a resume (#296 — the session keeps the model
+    // it was launched with), so an env-carried model hole (`vibe`) drops here and the
+    // harness re-opens the session on its own recorded model. Effort and identity
+    // are re-posed as the argv path does.
+    let harness_env = crate::harness_argv::render_env(
+        &descriptor.env,
+        &crate::harness_argv::EnvHoles {
+            model: String::new(),
+            effort: effort.unwrap_or_default().to_string(),
+            session_id: session_id.unwrap_or_default().to_string(),
+        },
+    );
     match sandbox {
         Some(wrap) => {
             let docker_tail = wrap_tail_in_docker_exec(run_id, wrap, &[], &tail_cmd);
@@ -1621,8 +1643,51 @@ pub(crate) fn probe_version(binary: &str) -> Option<String> {
 /// nothing anywhere yields [`harness_catalogue::Catalogue::default`] — the free-text
 /// fallback. Executes the binary; see [`probe_version`] for why that is safe here and
 /// not in [`binary_available`].
-pub(crate) fn probe_catalogue(binary: &str) -> crate::harness_catalogue::Catalogue {
-    probe_catalogue_on(binary, &harness_probe_path())
+pub(crate) fn probe_catalogue(
+    harness: &str,
+    binary: &str,
+    user_home: Option<&Path>,
+) -> crate::harness_catalogue::Catalogue {
+    // #961 / ADR-0056 §1 ter: a harness that declares a catalogue configuration file
+    // may have its whole home relocated by an env var (`VIBE_HOME`) — read here, at
+    // the one impure edge, and threaded into the testable core as data.
+    let home_override = crate::harness_probes::catalogue_config_file(harness)
+        .and_then(|f| std::env::var_os(f.home_env))
+        .filter(|v| !v.is_empty())
+        .map(PathBuf::from);
+    probe_catalogue_for(
+        harness,
+        binary,
+        &harness_probe_path(),
+        user_home,
+        home_override.as_deref(),
+    )
+}
+
+/// [`probe_catalogue`] with an explicit `PATH`, user home and home override — the
+/// testable core of the **file** source (#961, ADR-0056 §1 ter). Runs the binary
+/// ladder of [`probe_catalogue_on`] with the harness's declared catalogue file (if
+/// any) folded in **between the settings topic and `--help`**: after every generated
+/// source, before the prose. The file is read at `<home_override>/<file>` when the
+/// harness's home env var is set, else `<user_home>/<home_rel>/<file>`; unreadable or
+/// absent ⇒ nothing folds (the harness was never launched — an empty offer, the
+/// free-text fallback). A harness that declares no file reads none: the source is
+/// declared, never guessed.
+pub(crate) fn probe_catalogue_for(
+    harness: &str,
+    binary: &str,
+    path: &str,
+    user_home: Option<&Path>,
+    home_override: Option<&Path>,
+) -> crate::harness_catalogue::Catalogue {
+    let file_text = crate::harness_probes::catalogue_config_file(harness).and_then(|f| {
+        let home = match home_override {
+            Some(h) => h.to_path_buf(),
+            None => user_home?.join(f.home_rel),
+        };
+        std::fs::read_to_string(home.join(f.file)).ok()
+    });
+    probe_catalogue_with(binary, path, file_text.as_deref())
 }
 
 /// [`probe_version`] with an explicit `PATH` — the testable core (a test points it
@@ -1661,7 +1726,20 @@ pub(crate) fn probe_version_on(binary: &str, path: &str) -> Option<String> {
 /// failure is an empty axis, not an error. A binary
 /// that answers no `--help` at all yields the free-text fallback without any subcommand
 /// being guessed at.
+#[cfg(test)]
 pub(crate) fn probe_catalogue_on(binary: &str, path: &str) -> crate::harness_catalogue::Catalogue {
+    probe_catalogue_with(binary, path, None)
+}
+
+/// The ladder proper: [`probe_catalogue_on`] plus an optional **catalogue
+/// configuration file** text (#961, ADR-0056 §1 ter), already read by the caller, that
+/// folds in as preference 3 bis — after `help config`, before `--help`. `None` ⇒ the
+/// pre-#961 ladder, byte for byte.
+fn probe_catalogue_with(
+    binary: &str,
+    path: &str,
+    config_file: Option<&str>,
+) -> crate::harness_catalogue::Catalogue {
     use crate::harness_catalogue as cat;
     let Some(help) = run_probe(binary, &["--help"], path) else {
         return cat::Catalogue::default();
@@ -1687,6 +1765,17 @@ pub(crate) fn probe_catalogue_on(binary: &str, path: &str) -> crate::harness_cat
     if !catalogue.is_complete() && cat::advertises_subcommand(&help, "help") {
         if let Some(topic) = run_probe(binary, &["help", "config"], path) {
             catalogue.fill_missing_from(cat::parse_settings_prose(&topic));
+        }
+    }
+    // Preference 3 bis (#961, ADR-0056 §1 ter): the configuration file of the
+    // harness's home, when the harness declares one (`vibe`: `[[models]]` of
+    // `config.toml`). Written to be read by a program (the binary itself) but it
+    // describes ONE installation, so it ranks below every generated source and above
+    // the `--help` prose. Only vibe's reader exists today; a second file-declaring
+    // harness would dispatch on its `CatalogueConfigFile` here.
+    if !catalogue.is_complete() {
+        if let Some(text) = config_file {
+            catalogue.fill_missing_from(cat::parse_vibe_config_toml(text));
         }
     }
     // Preference 4: what `--help` itself enumerates.
@@ -3274,6 +3363,61 @@ mod tests {
         );
     }
 
+    /// #961 / ADR-0056 §1 ter: a harness that declares a **catalogue configuration
+    /// file** (vibe) gets its models from that file under the user's home — the
+    /// binary's `--help` enumerates nothing, and no subcommand is guessed at (the fake
+    /// errors on any argv but `--help`/`--version`, so a guessed source would show as
+    /// an empty catalogue). A harness that declares no file (pi's name on the same
+    /// binary) never reads it. A missing file is an empty catalogue, not an error.
+    #[cfg(unix)]
+    #[test]
+    fn probe_reads_the_declared_catalogue_file_under_the_home_and_only_when_declared() {
+        let bin_dir = tempfile::tempdir().unwrap();
+        let help = include_str!("../tests/fixtures/catalogue/vibe-2.25.8-help.txt");
+        let path = fake_harness_binary(bin_dir.path(), "vibe", help, "vibe 2.25.8");
+
+        let home = tempfile::tempdir().unwrap();
+        std::fs::create_dir_all(home.path().join(".vibe")).unwrap();
+        std::fs::write(
+            home.path().join(".vibe/config.toml"),
+            include_str!("../tests/fixtures/catalogue/vibe-2.25.8-config.toml"),
+        )
+        .unwrap();
+
+        let cat = probe_catalogue_for("vibe", "vibe", &path, Some(home.path()), None);
+        assert_eq!(cat.models, vec!["mistral-medium-3.5", "devstral-small", "local"]);
+        assert!(cat.efforts.is_empty(), "no effort axis: {cat:?}");
+
+        // Same binary, a harness name that declares no file: nothing is read.
+        let cat = probe_catalogue_for("pi", "vibe", &path, Some(home.path()), None);
+        assert_eq!(cat, crate::harness_catalogue::Catalogue::default());
+
+        // Declared, but the file is absent (vibe never launched): empty, not an error.
+        let empty_home = tempfile::tempdir().unwrap();
+        let cat = probe_catalogue_for("vibe", "vibe", &path, Some(empty_home.path()), None);
+        assert_eq!(cat, crate::harness_catalogue::Catalogue::default());
+        // No home at all: same.
+        let cat = probe_catalogue_for("vibe", "vibe", &path, None, None);
+        assert_eq!(cat, crate::harness_catalogue::Catalogue::default());
+
+        // The home env override (`VIBE_HOME`) relocates the whole home: the file is
+        // read there, and the user's `~/.vibe` is ignored.
+        let relocated = tempfile::tempdir().unwrap();
+        std::fs::write(
+            relocated.path().join("config.toml"),
+            "[[models]]\nname = \"elsewhere\"\n",
+        )
+        .unwrap();
+        let cat = probe_catalogue_for(
+            "vibe",
+            "vibe",
+            &path,
+            Some(home.path()),
+            Some(relocated.path()),
+        );
+        assert_eq!(cat.models, vec!["elsewhere"]);
+    }
+
     /// #616: a binary that can't be resolved on the injected `PATH` yields no
     /// version and an empty catalogue — the free-text fallback, never a panic.
     #[test]
@@ -3450,6 +3594,58 @@ mod tests {
             script.starts_with("exec bash -c 'export PDO_RUN_ID="),
             "legacy inner shape preserved when no session PATH: {script}"
         );
+    }
+
+    /// #961 (ADR-0045 as amended by #960) — `vibe` takes its model from the env, not
+    /// a flag: the wrapper exports `VIBE_ACTIVE_MODEL=<model>` when a model is posed,
+    /// exports **nothing** for it when none is (vibe then keeps its own
+    /// `active_model`, the account default), and the argv never carries `--model`.
+    #[test]
+    fn build_script_exports_vibe_model_through_the_env_hole_or_not_at_all() {
+        let prompt_path = Path::new("/tmp/test-prompt.md");
+        let build = |model: Option<&str>| {
+            build_tmux_script(
+                "run-abc",
+                "solo",
+                1,
+                5172,
+                "",
+                prompt_path,
+                None,
+                SessionTail::Agent {
+                    harness: &crate::harness_registry::vibe(),
+                    model,
+                    effort: None,
+                    session_id: None,
+                },
+                None,
+                None,
+            )
+        };
+        let posed = build(Some("devstral-small"));
+        assert!(
+            posed.contains("export VIBE_ACTIVE_MODEL=devstral-small &&"),
+            "model must be exported through the env hole: {posed}"
+        );
+        assert!(
+            posed.contains("export VIBE_ENABLE_UPDATE_CHECKS=false &&"),
+            "hygiene constants must survive: {posed}"
+        );
+        assert!(
+            posed.contains("exec vibe --trust --auto-approve \"$(cat"),
+            "argv must carry no --model: {posed}"
+        );
+        // The export precedes the tail so the launched process inherits it.
+        let export_at = posed.find("export VIBE_ACTIVE_MODEL=").unwrap();
+        let tail_at = posed.find("exec vibe").unwrap();
+        assert!(export_at < tail_at, "{posed}");
+
+        let unposed = build(None);
+        assert!(
+            !unposed.contains("VIBE_ACTIVE_MODEL"),
+            "no model ⇒ the variable is dropped, never exported empty: {unposed}"
+        );
+        assert!(unposed.contains("export VIBE_ENABLE_TELEMETRY=false &&"), "{unposed}");
     }
 
     /// #661 — a resumed session gets the same leading PATH export. A resurrected

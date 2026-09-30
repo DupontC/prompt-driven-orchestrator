@@ -11465,6 +11465,7 @@ async fn catalogue_for(
     state: &AppState,
     harness: &str,
     binary: &str,
+    user_home: Option<&Path>,
 ) -> harness_catalogue::CachedCatalogue {
     let mut guard = state.harness_catalogue_cache.lock().await;
     if let Some((at, cached)) = guard.get(harness) {
@@ -11488,10 +11489,13 @@ async fn catalogue_for(
     }
 
     let bin = binary.to_string();
-    let catalogue =
-        tokio::task::spawn_blocking(move || tmux_session_manager::probe_catalogue(&bin))
-            .await
-            .unwrap_or_default();
+    let name = harness.to_string();
+    let home = user_home.map(Path::to_path_buf);
+    let catalogue = tokio::task::spawn_blocking(move || {
+        tmux_session_manager::probe_catalogue(&name, &bin, home.as_deref())
+    })
+    .await
+    .unwrap_or_default();
     let cached = harness_catalogue::CachedCatalogue { version, catalogue };
     guard.insert(harness.to_string(), (Instant::now(), cached.clone()));
     cached
@@ -11531,13 +11535,14 @@ fn harness_catalogue_entry(
 /// first `/settings` fetch answers warm. A harness whose binary is absent is skipped
 /// — no probe, an empty offer, the free-text field.
 async fn probe_harness_catalogues_at_boot(state: &Arc<AppState>) {
-    let registry = match sandbox_run::sandbox_home_roots(state).ok().map(|(h, _)| h) {
-        Some(home) => harness_registry::HarnessRegistry::load(&home),
+    let home = sandbox_run::sandbox_home_roots(state).ok().map(|(h, _)| h);
+    let registry = match &home {
+        Some(home) => harness_registry::HarnessRegistry::load(home),
         None => harness_registry::HarnessRegistry::builtin(),
     };
     for listing in registry.listing() {
         if tmux_session_manager::binary_available(&listing.binary) {
-            let _ = catalogue_for(state, &listing.name, &listing.binary).await;
+            let _ = catalogue_for(state, &listing.name, &listing.binary, home.as_deref()).await;
         }
     }
 }
@@ -11865,7 +11870,7 @@ async fn build_settings_view(state: &AppState) -> Result<serde_json::Value, sqlx
     for h in registry.listing() {
         let installed = tmux_session_manager::binary_available(&h.binary);
         let cached = if installed {
-            catalogue_for(state, &h.name, &h.binary).await
+            catalogue_for(state, &h.name, &h.binary, host_home_path.as_deref()).await
         } else {
             harness_catalogue::CachedCatalogue::default()
         };
