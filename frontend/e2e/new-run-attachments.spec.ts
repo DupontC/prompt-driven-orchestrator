@@ -96,12 +96,12 @@ test("a dropped file becomes a chip and reaches the run as `files`", async ({
     page.waitForRequest((r) => r.url().endsWith("/runs") && r.method() === "POST"),
     page.getByTestId("launch-button").click(),
   ]);
-  const body = request.postData() ?? "";
+  // Chromium does not expose the body of a multipart request carrying files
+  // (`postData()` is empty), so the field split is asserted daemon-side below.
   expect(request.headers()["content-type"]).toContain("multipart/form-data");
-  expect(body).toContain('name="images"; filename="proto.png"');
-  expect(body).toContain('name="files"; filename="SPEC-779.md"');
 
-  // The daemon wrote both into `_input/` and lists them on the Start node.
+  // The daemon wrote both into `_input/` and lists them on the Start node: the PNG
+  // under `input_images` (field `images`), the Markdown under `input_files` (`files`).
   await expect
     .poll(
       async () => {
