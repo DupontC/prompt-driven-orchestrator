@@ -102,6 +102,7 @@ pub mod update_check;
 pub mod update_executor;
 #[allow(dead_code)]
 mod variable_resolver;
+mod vibe_session;
 mod workflow_importer;
 mod worktree_ops;
 
@@ -16955,6 +16956,70 @@ async fn run_stale_detection(state: &Arc<AppState>) {
             &sandbox_root,
         );
 
+        // #962 / ADR-0080: a harness that names its own sessions (`vibe`) has no
+        // imposed id — the sweep LEARNS it once per iteration: the first session of the
+        // node's working dir created after its (latest) spawn, frozen as a
+        // `NodeSessionLearned` event. Every vibe iteration of a live Run is visited,
+        // whatever its status: a node released to the user or completed before the
+        // first sweep still gets its cost. Tried again only after a relaunch newer
+        // than the last learned id (a fresh session may have been opened); a resume
+        // that reopened the old session finds nothing newer and the old id keeps
+        // serving.
+        let mut learned_now: HashMap<(String, i64), String> = HashMap::new();
+        let vibe_iterations: Vec<(String, i64)> = {
+            let mut seen = std::collections::BTreeSet::new();
+            events
+                .iter()
+                .filter(|e| e.kind == event_log::EventKind::NodeStarted)
+                .filter(|e| {
+                    e.payload
+                        .as_ref()
+                        .and_then(|p| p.get("harness"))
+                        .and_then(|v| v.as_str())
+                        == Some(harness_registry::VIBE)
+                })
+                .filter_map(|e| Some((e.node_id.clone()?, e.iter?)))
+                .filter(|k| seen.insert(k.clone()))
+                .collect()
+        };
+        for (node_id, iter) in &vibe_iterations {
+            let Some(spawn_ts) = event_log::learning_spawn_ts(&events, node_id, *iter) else {
+                continue;
+            };
+            let working_dir = if node_run_isolation(&events, &run_state, node_id, *iter) {
+                sub_worktree_path(&repo_root, run_id, node_id, *iter)
+            } else {
+                worktree_dir.clone()
+            };
+            let Some((dir, learned)) = learn_vibe_session(&stores.vibe, &working_dir, &spawn_ts)
+            else {
+                continue;
+            };
+            let ev = event_log::Event {
+                id: None,
+                run_id: run_id.to_string(),
+                ts: event_log::now_iso(),
+                kind: event_log::EventKind::NodeSessionLearned,
+                node_id: Some(node_id.clone()),
+                iter: Some(*iter),
+                payload: Some(serde_json::json!({
+                    "session_id": learned.session_id,
+                    "harness": harness_registry::VIBE,
+                    "store_dir": dir.to_string_lossy(),
+                })),
+            };
+            match append_event(state, &ev).await {
+                Ok(_) => {
+                    info!(
+                        "Stale detector: learned vibe session {} for node {node_id} iter {iter} in run {run_id}",
+                        learned.session_id
+                    );
+                    learned_now.insert((node_id.clone(), *iter), learned.session_id);
+                }
+                Err(e) => error!("Stale detector: failed to record learned session: {e}"),
+            }
+        }
+
         let running = stale_detector::running_nodes(&run_state);
         for (node_id, iter) in &running {
             // #653/ADR-0060: the sweep probes where the NodeRun actually works —
@@ -16981,6 +17046,11 @@ async fn run_stale_detection(state: &Arc<AppState>) {
             // The store ROOT is the resolved harness's own; the per-harness
             // `resolve_transcript` joins the right leaf.
             let node_store_root: &Path = stores.root_for(&node_harness, &projects_root);
+
+            // #962: an id learned by this sweep's pre-pass (below `running_nodes`) is
+            // not in the `events` snapshot yet.
+            let launch_session_id =
+                launch_session_id.or_else(|| learned_now.get(&(node_id.clone(), *iter)).cloned());
 
             let probes = SweepNodeProbes {
                 socket: &socket,
@@ -17344,15 +17414,30 @@ pub(crate) enum ReattachOutcome {
     /// relaunch `claude` in this node's worktree: a silent fallback would run a
     /// different agent than the node was started on, corrupting its transcript and
     /// its cost attribution.
-    FrozenHarnessGone { harness: String },
+    FrozenHarnessGone {
+        harness: String,
+    },
     /// The session cap refused the re-attach — a re-attach IS a (re)spawn.
-    CapReached { live: usize, cap: usize },
+    CapReached {
+        live: usize,
+        cap: usize,
+    },
     /// The `NodeStarted` resurrection trace was refused (e.g. a terminal Run) — do
     /// NOT launch a session the event log has no room for.
-    TraceRefused { error: String },
+    TraceRefused {
+        error: String,
+    },
     /// `tmux_session_manager::resume` itself failed.
-    ResumeFailed { error: String },
+    ResumeFailed {
+        error: String,
+    },
     /// The session was re-launched on its resume tail. The caller captures/reports.
+    /// #962 / ADR-0080 §4: re-attached, but into a **fresh** session — the learned one
+    /// was missing or torn (or none was learned yet); `reason` is also recorded as
+    /// `resume_note` on the resurrection `NodeStarted`.
+    ResumedFresh {
+        reason: String,
+    },
     Resumed,
 }
 
@@ -17396,6 +17481,36 @@ pub(crate) async fn reattach_node_session(
     // the node was LAUNCHED with, and resume by the pinned session id.
     let launch_effort = find_launch_effort(events, node_id, iter);
     let launch_session_id = find_launch_session_id(events, node_id, iter);
+    // #962 / ADR-0080 §4: a harness that names its own sessions (`vibe`) resumes by
+    // its LEARNED id only while that session is still resumable; else it relaunches
+    // fresh and the resurrection event says why (the sweep then learns the new id).
+    let vibe_resume =
+        if find_launch_harness(events, node_id, iter).as_deref() == Some(harness_registry::VIBE) {
+            let home = sandbox_run::sandbox_home_roots(state)
+                .ok()
+                .map(|(h, _)| h)
+                .or_else(|| std::env::var_os("HOME").map(PathBuf::from));
+            home.map(|h| {
+                vibe_session::resume_identity(
+                    &sandbox_run::vibe_store_root(&h),
+                    launch_session_id.as_deref(),
+                )
+            })
+        } else {
+            None
+        };
+    let (launch_session_id, fresh_reason) = match vibe_resume {
+        Some(vibe_session::ResumeIdentity {
+            session_id,
+            fresh_reason,
+        }) => {
+            if let Some(reason) = &fresh_reason {
+                warn!("reattach run {run_id} node {node_id} iter {iter}: {reason}");
+            }
+            (session_id, fresh_reason)
+        }
+        None => (launch_session_id, None),
+    };
     // Re-pose the harness FROZEN at spawn, resolved against the embedded floor merged
     // with the disk descriptor tier. A name that WAS frozen but no longer resolves
     // REFUSES — never a silent `claude` relaunch, which would run a different agent in
@@ -17449,7 +17564,19 @@ pub(crate) async fn reattach_node_session(
         kind: event_log::EventKind::NodeStarted,
         node_id: Some(node_id.to_string()),
         iter: Some(iter),
-        payload: find_launch_node_started_payload(events, node_id, iter),
+        payload: {
+            let mut payload = find_launch_node_started_payload(events, node_id, iter);
+            // #962: a fresh relaunch is SAID on the event that records it.
+            if let (Some(reason), Some(serde_json::Value::Object(map))) =
+                (&fresh_reason, payload.as_mut())
+            {
+                map.insert(
+                    "resume_note".to_string(),
+                    serde_json::Value::String(reason.clone()),
+                );
+            }
+            payload
+        },
     };
     if let Err(e) = append_event(state, &resurrection_started).await {
         // The guard also enforces run-liveness on this append; a refusal means the
@@ -17501,7 +17628,10 @@ pub(crate) async fn reattach_node_session(
             error: e.to_string(),
         };
     }
-    ReattachOutcome::Resumed
+    match fresh_reason {
+        Some(reason) => ReattachOutcome::ResumedFresh { reason },
+        None => ReattachOutcome::Resumed,
+    }
 }
 
 async fn node_pane(
@@ -17679,7 +17809,7 @@ async fn node_pane(
             }
             // Working dir gone → fall through to the placeholder below.
             ReattachOutcome::WorkingDirMissing => {}
-            ReattachOutcome::Resumed => {
+            ReattachOutcome::Resumed | ReattachOutcome::ResumedFresh { .. } => {
                 tokio::time::sleep(Duration::from_millis(500)).await;
                 let content = tmux_session_manager::capture(&socket, &session_name)
                     .unwrap_or_else(|| "Connecting...".to_string());
@@ -17735,19 +17865,42 @@ fn find_launch_effort(events: &[event_log::Event], node_id: &str, iter: i64) -> 
 /// must resolve to the *fresh* id it pinned, not the dead session's. A missing key
 /// yields `None`, i.e. newest-mtime transcript resolution and a bare `--continue`.
 fn find_launch_session_id(events: &[event_log::Event], node_id: &str, iter: i64) -> Option<String> {
-    events
-        .iter()
-        .rev()
-        .find(|e| {
-            e.kind == event_log::EventKind::NodeStarted
-                && e.node_id.as_deref() == Some(node_id)
-                && e.iter == Some(iter)
+    // #962 / ADR-0080: imposed (NodeStarted) or learned (NodeSessionLearned).
+    event_log::session_id_for(events, node_id, iter)
+}
+
+/// ADR-0080 §2 — learn the vibe session of a node: list every `meta.json` under the
+/// store root and pick the first session of `working_dir` created at or after
+/// `spawn_ts` (an RFC 3339 event timestamp). Reads the store once per attempt; an
+/// unreadable root or timestamp is "nothing to learn yet".
+fn learn_vibe_session(
+    store_root: &Path,
+    working_dir: &Path,
+    spawn_ts: &str,
+) -> Option<(PathBuf, vibe_session::SessionMeta)> {
+    let spawn = chrono::DateTime::parse_from_rfc3339(spawn_ts)
+        .ok()?
+        .with_timezone(&chrono::Utc);
+    // vibe records the working directory as the kernel resolves it (`/private/tmp/…`
+    // on macOS for a `/tmp/…` repo); compare canonical forms on both sides, so a
+    // symlinked repo root never hides its own sessions.
+    let working_dir =
+        std::fs::canonicalize(working_dir).unwrap_or_else(|_| working_dir.to_path_buf());
+    let entries: Vec<(PathBuf, String)> = std::fs::read_dir(store_root)
+        .ok()?
+        .filter_map(|e| e.ok().map(|e| e.path()))
+        .filter(|p| p.is_dir())
+        .filter_map(|p| {
+            std::fs::read_to_string(p.join("meta.json"))
+                .ok()
+                .map(|t| (p, t))
         })
-        .and_then(|e| e.payload.as_ref())
-        .and_then(|p| p.get("session_id"))
-        .and_then(|v| v.as_str())
-        .filter(|s| !s.is_empty())
-        .map(|s| s.to_string())
+        .collect();
+    vibe_session::learn_session(
+        entries.iter().map(|(p, t)| (p.as_path(), t.as_str())),
+        &working_dir,
+        spawn,
+    )
 }
 
 /// The harness a node's iteration was **launched** with (ADR-0046), from its
