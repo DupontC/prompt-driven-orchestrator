@@ -64,6 +64,11 @@ défaut ; on garde le balayage comme mécanisme de base et on note l'améliorati
   session ou s'échanger la leur. Réduit par le filtre `start_time >= spawn`, pas supprimé.
 - **Une session dont le premier tour n'a pas commencé** n'a pas encore de dossier : l'apprentissage
   est différé, les lectures disent « — » jusque-là.
+- **Un Run entièrement terminé avant le premier balayage** (intervalle de 30 s) n'est jamais
+  appris : le balayage ne visite que les Runs vivants. Mesuré au FP de #962 ; piste non
+  construite : une passe d'apprentissage à la complétion du nœud.
+- **Le répertoire de travail se compare en forme canonique** : `vibe` enregistre le chemin
+  résolu par le noyau (`/private/tmp/…` sur macOS) là où PDO tient `/tmp/…`.
 - **Une horloge de machine qui recule** entre spawn et premier tour rend le filtre aveugle ; on
   n'ajoute pas de tolérance : le cas est une panne, pas un usage.
 
