@@ -65,7 +65,7 @@ test("a dropped file becomes a chip and reaches the run as `files`", async ({
 
   // The hidden <input type=file> has no accept filter any more — any file goes.
   const input = page.getByTestId("image-file-input");
-  await expect(input).toHaveAttribute("accept", "");
+  await expect(input).not.toHaveAttribute("accept");
   await input.setInputFiles([
     {
       name: "SPEC-779.md",
