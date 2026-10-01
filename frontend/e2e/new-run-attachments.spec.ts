@@ -106,8 +106,8 @@ test("a dropped file becomes a chip and reaches the run as `files`", async ({
     .poll(
       async () => {
         const resp = await page.request.get(`${baseURL}/runs`);
-        const runs = (await resp.json()) as Array<{ run_id: string; pipeline: string }>;
-        const mine = runs.find((r) => r.pipeline === PIPELINE_NAME);
+        const runs = (await resp.json()) as Array<{ run_id: string; pipeline_name: string }>;
+        const mine = runs.find((r) => r.pipeline_name === PIPELINE_NAME);
         if (!mine) return null;
         const detail = await (await page.request.get(`${baseURL}/runs/${mine.run_id}`)).json();
         return {

@@ -190,6 +190,8 @@ test("Review page: fork → tip, one node's delivery, context expansion, node sh
     "node:beta:1:before",
     "node:beta:1:after",
     "tip",
+    // #835: the Run's working tree is a ref while it exists, listed last.
+    "worktree",
   ]);
   const sha = (id: string) => refs.refs.find((r) => r.id === id)!.sha!;
   const alphaFiles = git(E2E_TARGET_REPO, [
@@ -220,7 +222,9 @@ test("Review page: fork → tip, one node's delivery, context expansion, node sh
   await expect(page).toHaveURL(new RegExp(`/runs/${run_id}/review$`));
   await expect(page.getByTestId("review-page")).toBeVisible({ timeout: 10_000 });
   await expect(page.getByTestId("review-from")).toHaveText(/Fork point/, { timeout: 10_000 });
-  await expect(page.getByTestId("review-to")).toHaveText(/Run tip/);
+  // #835: while the Run's worktree exists, the default destination is the
+  // working tree (commits + uncommitted edits), no longer the Run tip.
+  await expect(page.getByTestId("review-to")).toHaveText(/Working tree/);
   await expect(page.getByTestId("review-view-toggle")).toHaveAttribute("data-view", "split");
   const rows = page.getByTestId("review-file-row");
   await expect(rows).toHaveCount(3, { timeout: 10_000 });
