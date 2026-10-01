@@ -385,13 +385,35 @@ pub(crate) fn vibe_store_root_with(home_root: &Path, home_override: Option<&Path
         .unwrap_or_else(|| vibe_home.join("logs").join("session"))
 }
 
-/// [`vibe_store_root_with`] reading `VIBE_HOME` from the daemon's environment.
+/// [`vibe_store_root_with`] reading `VIBE_HOME` from the daemon's environment, **cached**
+/// for [`VIBE_STORE_ROOT_TTL`] per `(home_root, override)` (#964): `HarnessStores::for_run`
+/// is built per Run in the sweep and in every Stats loop, and `save_dir` changes about as
+/// often as the binary's version — one file read a minute is plenty.
 pub(crate) fn vibe_store_root(home_root: &Path) -> PathBuf {
     let over = std::env::var_os("VIBE_HOME")
         .filter(|v| !v.is_empty())
         .map(PathBuf::from);
-    vibe_store_root_with(home_root, over.as_deref())
+    let key = (home_root.to_path_buf(), over.clone());
+    let mut cache = VIBE_STORE_ROOT_CACHE
+        .lock()
+        .unwrap_or_else(|e| e.into_inner());
+    if let Some((at, k, root)) = cache.as_ref() {
+        if *k == key && at.elapsed() < VIBE_STORE_ROOT_TTL {
+            return root.clone();
+        }
+    }
+    let root = vibe_store_root_with(home_root, over.as_deref());
+    *cache = Some((std::time::Instant::now(), key, root.clone()));
+    root
 }
+
+/// How long a resolved vibe store root is reused before `config.toml` is read again.
+const VIBE_STORE_ROOT_TTL: std::time::Duration = std::time::Duration::from_secs(60);
+
+#[allow(clippy::type_complexity)]
+static VIBE_STORE_ROOT_CACHE: std::sync::Mutex<
+    Option<(std::time::Instant, (PathBuf, Option<PathBuf>), PathBuf)>,
+> = std::sync::Mutex::new(None);
 
 /// The store roots of the reported-cost harnesses (#707): one field per harness, so a
 /// consumer that reads several harnesses' stores threads one value instead of one
