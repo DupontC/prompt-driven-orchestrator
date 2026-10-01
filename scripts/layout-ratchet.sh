@@ -83,9 +83,14 @@ cd "$(git rev-parse --show-toplevel)"
 #   Settings › General › Stats absorptions list (every absorption, its origin, uncombine as
 #   you go). SettingsSurface renders it; it reuses StatsAbsorption's UncombineButton and
 #   lib/statsAbsorption, so only the Settings layout is new.
+# crates/pdo-daemon/src: 94 (#962, story #960, release 1.114.0) admits vibe_session.rs —
+#   reading a vibe session store (meta.json + messages.jsonl), learning the session id
+#   once (ADR-0080) and the turn-end hooks file. It is ONE harness's store reader, the
+#   sibling of pi_session.rs; harness_probes.rs only dispatches to it.
+# frontend/src/components: 201 ratchets down (the tree holds 201 direct files).
 BASELINES='
-frontend/src/components 205
-crates/pdo-daemon/src 93
+frontend/src/components 201
+crates/pdo-daemon/src 94
 '
 
 fail=0
