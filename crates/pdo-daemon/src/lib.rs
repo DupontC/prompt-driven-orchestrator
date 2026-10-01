@@ -16821,12 +16821,16 @@ impl stale_detector::NodeProbes for SweepNodeProbes<'_> {
     fn transcript_tail(&self) -> Option<stale_detector::TranscriptTail> {
         // Dispatch to the resolved harness's own implementation: a data-declared
         // harness resolves `None` and no tail is read.
+        // #963: the tail is read on the harness's MESSAGES file — the same file for
+        // a one-file session, the `messages.jsonl` sibling for `vibe` (resolved by
+        // `meta.json`).
         harness_probes::resolve_transcript(
             self.harness,
             self.projects_root,
             self.working_dir,
             self.session_id,
         )
+        .map(|p| harness_probes::messages_transcript(self.harness, &p))
         .as_deref()
         .and_then(stale_detector::read_transcript_tail)
     }

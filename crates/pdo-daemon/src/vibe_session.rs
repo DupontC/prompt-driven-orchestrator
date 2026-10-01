@@ -19,6 +19,83 @@
 
 use std::path::{Path, PathBuf};
 
+/// Where vibe reads a project's hooks: `<cwd>/.vibe/hooks.toml`, when the cwd is trusted
+/// (`--trust`). The turn-end hook PDO arms lives there (#963) — vibe has no flag to point
+/// at a hooks file, so the "injected settings file" is a fixed-path file in the worktree.
+pub(crate) const HOOKS_FILE_REL: &str = ".vibe/hooks.toml";
+
+/// The first line of a hooks file PDO wrote: how PDO recognises its own file (rewrite
+/// it idempotently on resume) and tells it from a **user's** (never touched, never
+/// merged — the absence is said instead).
+pub(crate) const HOOKS_FILE_MARKER: &str = "# pdo-managed: turn-end hook (PDO #963, ADR-0043)";
+
+/// The hooks file body: one `post_agent` hook — "once per turn, after the agent finishes
+/// responding" (vibe 2.25.8) — running `pdo complete --auto` (the node's identity rides
+/// in the pane's `PDO_*` env, so two nodes of one worktree may share the file). Wrapped
+/// so it **always exits 0 with an empty stdout**: vibe reads a hook's stdout as a JSON
+/// response and a `deny` would re-inject a retry message into the conversation; a
+/// refused `pdo complete --auto` (outputs missing) must stay silent for vibe and leave
+/// the turn to the agent.
+pub(crate) const TURN_END_HOOK_TOML: &str = "# pdo-managed: turn-end hook (PDO #963, ADR-0043)\n\
+# Written by PDO at node spawn when turn-end auto-completion is enabled. Not yours to edit:\n\
+# it is rewritten on resume and excluded from the repository (info/exclude).\n\
+\n\
+[[hooks]]\n\
+name = \"pdo-turn-end\"\n\
+type = \"post_agent\"\n\
+command = \"sh -c 'pdo complete --auto >/dev/null 2>&1; exit 0'\"\n\
+timeout = 30.0\n\
+description = \"PDO: complete the node when the turn ends\"\n";
+
+/// Whether a hooks file text is PDO's own (carries the marker as its first line).
+#[cfg(test)]
+pub(crate) fn hooks_file_is_pdo_managed(text: &str) -> bool {
+    text.lines().next().map(str::trim) == Some(HOOKS_FILE_MARKER)
+}
+
+/// The sweep's fallback for "the turn ended" (ADR-0043 applied to vibe): the last
+/// non-empty row of `messages.jsonl` is an **assistant** message with no pending
+/// `tool_calls`. A trailing `user` row (the assistant owes a reply), a `tool` row (a
+/// call came back, the next step is pending) or an assistant row carrying `tool_calls`
+/// is not a finished turn. Torn trailing lines are skipped.
+pub(crate) fn turn_ended(messages_tail: &str) -> bool {
+    last_row(messages_tail)
+        .map(|m| {
+            m.get("role").and_then(|r| r.as_str()) == Some("assistant")
+                && m.get("tool_calls")
+                    .map(|t| t.is_null() || t.as_array().is_some_and(|a| a.is_empty()))
+                    .unwrap_or(true)
+        })
+        .unwrap_or(false)
+}
+
+/// A hard error vibe wrote as its last row: an assistant/system row whose `error`
+/// field (or an `error` role) names the failure. vibe stays resident after a model
+/// error (the exit code is no verdict), so the transcript is where it is read.
+pub(crate) fn hard_error(messages_tail: &str) -> Option<String> {
+    let m = last_row(messages_tail)?;
+    if m.get("role").and_then(|r| r.as_str()) == Some("error") {
+        return m
+            .get("content")
+            .and_then(|c| c.as_str())
+            .map(str::to_string);
+    }
+    m.get("error").and_then(|e| {
+        e.as_str().map(str::to_string).or_else(|| {
+            e.get("message")
+                .and_then(|v| v.as_str())
+                .map(str::to_string)
+        })
+    })
+}
+
+fn last_row(text: &str) -> Option<serde_json::Value> {
+    text.lines()
+        .rev()
+        .filter(|l| !l.trim().is_empty())
+        .find_map(|l| serde_json::from_str::<serde_json::Value>(l).ok())
+}
+
 /// A reported cost, already in dollars (ADR-0052 §2 amended): constant 1.0.
 pub(crate) const REPORTED_USD_CONSTANT: f64 = 1.0;
 
@@ -398,6 +475,50 @@ mod tests {
             session_meta(PRICED).unwrap().working_directory,
             PathBuf::from("/work/repo")
         );
+    }
+
+    #[test]
+    fn the_turn_ended_when_the_last_row_is_an_assistant_reply_without_pending_tool_calls() {
+        // The steering fixture ends on an assistant reply: a finished turn.
+        assert!(turn_ended(STEERING));
+        let rows = |tail: &str| STEERING.trim_end().to_string() + "\n" + tail + "\n";
+        // The assistant owes a reply / a tool call is pending: not finished.
+        assert!(!turn_ended(&rows(
+            r#"{"role":"user","content":"more","injected":false}"#
+        )));
+        assert!(!turn_ended(&rows(
+            r#"{"role":"assistant","content":"","tool_calls":[{"id":"c9"}]}"#
+        )));
+        assert!(!turn_ended(&rows(
+            r#"{"role":"tool","content":"out","tool_call_id":"c9"}"#
+        )));
+        // A torn trailing line is skipped, the row before decides.
+        assert!(turn_ended(&rows("{torn")));
+        assert!(!turn_ended(""));
+        // Hard errors: an error row, or an assistant row carrying `error`.
+        assert_eq!(
+            hard_error(&rows(r#"{"role":"error","content":"Network error"}"#)).as_deref(),
+            Some("Network error")
+        );
+        assert_eq!(
+            hard_error(&rows(
+                r#"{"role":"assistant","content":"","error":{"message":"rate limited"}}"#
+            ))
+            .as_deref(),
+            Some("rate limited")
+        );
+        assert_eq!(hard_error(STEERING), None);
+        // The hooks file PDO writes is recognised by its first line; a user's is not.
+        assert!(hooks_file_is_pdo_managed(TURN_END_HOOK_TOML));
+        assert!(!hooks_file_is_pdo_managed("[[hooks]]\nname = \"lint\"\n"));
+        assert!(TURN_END_HOOK_TOML.contains("type = \"post_agent\""));
+        assert!(
+            TURN_END_HOOK_TOML.contains("exit 0"),
+            "never a deny for vibe"
+        );
+        // And it is valid TOML with exactly one hook.
+        let doc: toml::Table = TURN_END_HOOK_TOML.parse().unwrap();
+        assert_eq!(doc["hooks"].as_array().unwrap().len(), 1);
     }
 
     #[test]

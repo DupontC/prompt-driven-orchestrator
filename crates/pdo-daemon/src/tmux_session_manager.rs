@@ -471,6 +471,90 @@ fn build_script_tail(prompt_path: &Path, timeout_secs: u64) -> String {
     )
 }
 
+/// What arming a worktree-placed turn-end file did (#963).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) enum WorktreeHookArmed {
+    /// PDO's file is in place (written, or rewritten idempotently on a resume).
+    Written(PathBuf),
+    /// A file **the user owns** sits at that path: PDO wrote nothing, merged nothing;
+    /// the turn end is absent for this node and the caller says so.
+    SkippedUserFile(PathBuf),
+}
+
+/// Arm a harness's turn-end file **in the worktree** (#963,
+/// [`crate::harness_probes::TurnEndPlacement::WorktreeFile`]): write `injection.body`
+/// at `<working_dir>/<rel>` and exclude it from the repository under the Run's marker
+/// (ADR-0062), unless a file that is not PDO's (no marker) already lives there — then
+/// nothing is written and the absence is returned, never a merge. Idempotent: a resumed
+/// node rewrites its own file. The exclusion is best-effort (a working dir outside any
+/// Git work tree is logged, not an error): the file is the gate, the exclusion the
+/// hygiene.
+pub(crate) fn arm_worktree_turn_end_file(
+    working_dir: &Path,
+    run_id: &str,
+    injection: &crate::harness_probes::TurnEndInjection,
+) -> Result<WorktreeHookArmed> {
+    let crate::harness_probes::TurnEndPlacement::WorktreeFile { rel, marker } = injection.placement
+    else {
+        anyhow::bail!("not a worktree-placed turn-end file");
+    };
+    let path = working_dir.join(rel);
+    if let Ok(existing) = std::fs::read_to_string(&path) {
+        if existing.lines().next().map(str::trim) != Some(marker) {
+            return Ok(WorktreeHookArmed::SkippedUserFile(path));
+        }
+    }
+    if let Some(parent) = path.parent() {
+        std::fs::create_dir_all(parent)?;
+    }
+    std::fs::write(&path, injection.body)?;
+    if let Err(e) = crate::skill_delivery::add_exclusions(
+        working_dir,
+        run_id,
+        &[format!("/{}", rel.trim_start_matches('/'))],
+    ) {
+        warn!(
+            "run {run_id}: turn-end file {} written but not excluded: {e:#}",
+            path.display()
+        );
+    }
+    Ok(WorktreeHookArmed::Written(path))
+}
+
+/// Arm the worktree turn-end file for `harness` when its injection is worktree-placed
+/// and the switch is on; say once per Run when a user's file blocks it. `Ok(())` in
+/// every other case — the argv-hole placement is handled by the caller.
+fn arm_worktree_turn_end_if_declared(
+    working_dir: &Path,
+    run_id: &str,
+    node_id: &str,
+    harness: &str,
+    inject_hook: bool,
+) -> Result<()> {
+    if !inject_hook {
+        return Ok(());
+    }
+    let Some(injection) = crate::harness_probes::turn_end_injection(harness) else {
+        return Ok(());
+    };
+    if !matches!(
+        injection.placement,
+        crate::harness_probes::TurnEndPlacement::WorktreeFile { .. }
+    ) {
+        return Ok(());
+    }
+    match arm_worktree_turn_end_file(working_dir, run_id, &injection)? {
+        WorktreeHookArmed::Written(_) => {}
+        WorktreeHookArmed::SkippedUserFile(path) => warn!(
+            "run {run_id} node {node_id}: turn-end auto-completion is enabled but {} is a file \
+             of yours — PDO leaves it alone (no merge), so this `{harness}` node will not be \
+             auto-completed on turn end; complete it by signalling `pdo complete`",
+            path.display()
+        ),
+    }
+    Ok(())
+}
+
 /// Construct the script tmux launches for a node run.
 ///
 /// `tmux_cmd_override` replaces the default `claude …` tail when `Some` — the
@@ -814,6 +898,17 @@ pub fn spawn(
     // a harness without a substrate. One switch (`inject_hook`, i.e.
     // `autocomplete_turn_end`) governs all of them; off ⇒ no file, and the token
     // (`--settings` / `-e`) drops at render.
+    // #963: a harness whose turn-end file lives at a fixed path in the worktree
+    // (`vibe`: `.vibe/hooks.toml`) gets it here — no argv hole involved.
+    if let SessionTail::Agent { harness, .. } = &tail {
+        arm_worktree_turn_end_if_declared(
+            working_dir,
+            run_id,
+            node_id,
+            &harness.name,
+            inject_hook,
+        )?;
+    }
     let settings_path = match &tail {
         SessionTail::Agent { harness, .. } if inject_hook && harness.has_settings_hole() => {
             match crate::harness_probes::turn_end_injection(&harness.name) {
@@ -1050,6 +1145,8 @@ pub fn resume(
     // file is the one its substrate takes (`harness_probes::turn_end_injection`) —
     // a resumed `pi` node re-arms its `agent_settled` extension (ADR-0043 D7: the
     // primary substrate must survive a resume), never the claude JSON.
+    // #963: re-arm a worktree-placed turn-end file too (ADR-0043 D7).
+    arm_worktree_turn_end_if_declared(working_dir, run_id, node_id, &descriptor.name, inject_hook)?;
     let settings_path = if inject_hook && descriptor.has_settings_hole() {
         match crate::harness_probes::turn_end_injection(&descriptor.name) {
             Some(injection) => {
@@ -3597,6 +3694,70 @@ mod tests {
             script.starts_with("exec bash -c 'export PDO_RUN_ID="),
             "legacy inner shape preserved when no session PATH: {script}"
         );
+    }
+
+    /// #963 — vibe's turn-end hook is a fixed-path file in the worktree: written and
+    /// excluded under the Run's marker, rewritten idempotently (a resume), and NEVER
+    /// written over a user's own hooks file — that case is returned, not merged.
+    #[test]
+    fn vibe_turn_end_hook_is_armed_in_the_worktree_excluded_and_never_over_a_users_file() {
+        let repo = tempfile::tempdir().unwrap();
+        let git = |args: &[&str]| {
+            let out = std::process::Command::new("git")
+                .args(args)
+                .current_dir(repo.path())
+                .output()
+                .unwrap();
+            assert!(
+                out.status.success(),
+                "git {args:?}: {}",
+                String::from_utf8_lossy(&out.stderr)
+            );
+        };
+        git(&["init", "-q"]);
+        let injection = crate::harness_probes::turn_end_injection("vibe").unwrap();
+
+        let armed = arm_worktree_turn_end_file(repo.path(), "run-1", &injection).unwrap();
+        let path = repo.path().join(".vibe/hooks.toml");
+        assert_eq!(armed, WorktreeHookArmed::Written(path.clone()));
+        let body = std::fs::read_to_string(&path).unwrap();
+        assert!(crate::vibe_session::hooks_file_is_pdo_managed(&body));
+        assert!(body.contains("type = \"post_agent\""));
+        assert_eq!(
+            crate::skill_delivery::exclusions_of(repo.path(), "run-1"),
+            vec!["/.vibe/hooks.toml".to_string()],
+            "excluded under the Run's marker, like a delivered skill"
+        );
+
+        // A resume rewrites PDO's own file: idempotent, one exclusion line.
+        let again = arm_worktree_turn_end_file(repo.path(), "run-1", &injection).unwrap();
+        assert_eq!(again, WorktreeHookArmed::Written(path.clone()));
+        assert_eq!(
+            crate::skill_delivery::exclusions_of(repo.path(), "run-1").len(),
+            1
+        );
+
+        // A user's file at that path: left alone, said.
+        std::fs::write(
+            &path,
+            "[[hooks]]\nname = \"lint\"\ntype = \"post_agent\"\ncommand = \"eslint .\"\n",
+        )
+        .unwrap();
+        let skipped = arm_worktree_turn_end_file(repo.path(), "run-2", &injection).unwrap();
+        assert_eq!(skipped, WorktreeHookArmed::SkippedUserFile(path.clone()));
+        assert!(
+            std::fs::read_to_string(&path).unwrap().contains("eslint"),
+            "never merged"
+        );
+        assert!(crate::skill_delivery::exclusions_of(repo.path(), "run-2").is_empty());
+
+        // Claude's and pi's injections are not worktree-placed: refused here.
+        assert!(arm_worktree_turn_end_file(
+            repo.path(),
+            "run-3",
+            &crate::harness_probes::turn_end_injection("pi").unwrap()
+        )
+        .is_err());
     }
 
     /// #961 (ADR-0045 as amended by #960) — `vibe` takes its model from the env, not

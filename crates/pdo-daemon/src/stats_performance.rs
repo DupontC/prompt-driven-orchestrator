@@ -1273,7 +1273,7 @@ fn main_session_steering(
         crate::harness_probes::resolve_transcript(harness, root, working_dir, Some(session_id));
     let steering_file = resolved
         .as_deref()
-        .map(|p| crate::harness_probes::steering_transcript(harness, p));
+        .map(|p| crate::harness_probes::messages_transcript(harness, p));
     let text = match (already_read, resolved.as_deref(), steering_file.as_deref()) {
         (Some(text), Some(r), Some(sf)) if r == sf => Some(text.to_string()),
         (_, _, Some(sf)) => std::fs::read_to_string(sf).ok(),
