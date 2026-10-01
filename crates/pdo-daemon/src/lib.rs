@@ -16956,6 +16956,70 @@ async fn run_stale_detection(state: &Arc<AppState>) {
             &sandbox_root,
         );
 
+        // #962 / ADR-0080: a harness that names its own sessions (`vibe`) has no
+        // imposed id — the sweep LEARNS it once per iteration: the first session of the
+        // node's working dir created after its (latest) spawn, frozen as a
+        // `NodeSessionLearned` event. Every vibe iteration of a live Run is visited,
+        // whatever its status: a node released to the user or completed before the
+        // first sweep still gets its cost. Tried again only after a relaunch newer
+        // than the last learned id (a fresh session may have been opened); a resume
+        // that reopened the old session finds nothing newer and the old id keeps
+        // serving.
+        let mut learned_now: HashMap<(String, i64), String> = HashMap::new();
+        let vibe_iterations: Vec<(String, i64)> = {
+            let mut seen = std::collections::BTreeSet::new();
+            events
+                .iter()
+                .filter(|e| e.kind == event_log::EventKind::NodeStarted)
+                .filter(|e| {
+                    e.payload
+                        .as_ref()
+                        .and_then(|p| p.get("harness"))
+                        .and_then(|v| v.as_str())
+                        == Some(harness_registry::VIBE)
+                })
+                .filter_map(|e| Some((e.node_id.clone()?, e.iter?)))
+                .filter(|k| seen.insert(k.clone()))
+                .collect()
+        };
+        for (node_id, iter) in &vibe_iterations {
+            let Some(spawn_ts) = event_log::learning_spawn_ts(&events, node_id, *iter) else {
+                continue;
+            };
+            let working_dir = if node_run_isolation(&events, &run_state, node_id, *iter) {
+                sub_worktree_path(&repo_root, run_id, node_id, *iter)
+            } else {
+                worktree_dir.clone()
+            };
+            let Some((dir, learned)) = learn_vibe_session(&stores.vibe, &working_dir, &spawn_ts)
+            else {
+                continue;
+            };
+            let ev = event_log::Event {
+                id: None,
+                run_id: run_id.to_string(),
+                ts: event_log::now_iso(),
+                kind: event_log::EventKind::NodeSessionLearned,
+                node_id: Some(node_id.clone()),
+                iter: Some(*iter),
+                payload: Some(serde_json::json!({
+                    "session_id": learned.session_id,
+                    "harness": harness_registry::VIBE,
+                    "store_dir": dir.to_string_lossy(),
+                })),
+            };
+            match append_event(state, &ev).await {
+                Ok(_) => {
+                    info!(
+                        "Stale detector: learned vibe session {} for node {node_id} iter {iter} in run {run_id}",
+                        learned.session_id
+                    );
+                    learned_now.insert((node_id.clone(), *iter), learned.session_id);
+                }
+                Err(e) => error!("Stale detector: failed to record learned session: {e}"),
+            }
+        }
+
         let running = stale_detector::running_nodes(&run_state);
         for (node_id, iter) in &running {
             // #653/ADR-0060: the sweep probes where the NodeRun actually works —
@@ -16983,43 +17047,10 @@ async fn run_stale_detection(state: &Arc<AppState>) {
             // `resolve_transcript` joins the right leaf.
             let node_store_root: &Path = stores.root_for(&node_harness, &projects_root);
 
-            // #962 / ADR-0080: a harness that names its own sessions (`vibe`) has no
-            // imposed id — the sweep LEARNS it once: the first session of this node's
-            // working dir created after its (latest) spawn, frozen as a
-            // `NodeSessionLearned` event. Tried again only after a relaunch newer
-            // than the last learned id (a fresh session may have been opened); a
-            // resume that reopened the old session finds nothing newer and the old
-            // id keeps serving.
-            let launch_session_id = match (launch_session_id, node_harness.as_str()) {
-                (None, harness_registry::VIBE) | (Some(_), harness_registry::VIBE)
-                    if event_log::learning_spawn_ts(&events, node_id, *iter).is_some() =>
-                {
-                    let spawn_ts = event_log::learning_spawn_ts(&events, node_id, *iter).unwrap();
-                    match learn_vibe_session(node_store_root, &working_dir, &spawn_ts) {
-                        Some((dir, learned)) => {
-                            let ev = event_log::Event {
-                                id: None,
-                                run_id: run_id.to_string(),
-                                ts: event_log::now_iso(),
-                                kind: event_log::EventKind::NodeSessionLearned,
-                                node_id: Some(node_id.to_string()),
-                                iter: Some(*iter),
-                                payload: Some(serde_json::json!({
-                                    "session_id": learned.session_id,
-                                    "harness": harness_registry::VIBE,
-                                    "store_dir": dir.to_string_lossy(),
-                                })),
-                            };
-                            if let Err(e) = append_event(state, &ev).await {
-                                error!("Stale detector: failed to record learned session: {e}");
-                            }
-                            Some(learned.session_id)
-                        }
-                        None => event_log::learned_session_id(&events, node_id, *iter),
-                    }
-                }
-                (id, _) => id,
-            };
+            // #962: an id learned by this sweep's pre-pass (below `running_nodes`) is
+            // not in the `events` snapshot yet.
+            let launch_session_id =
+                launch_session_id.or_else(|| learned_now.get(&(node_id.clone(), *iter)).cloned());
 
             let probes = SweepNodeProbes {
                 socket: &socket,
@@ -17850,6 +17881,11 @@ fn learn_vibe_session(
     let spawn = chrono::DateTime::parse_from_rfc3339(spawn_ts)
         .ok()?
         .with_timezone(&chrono::Utc);
+    // vibe records the working directory as the kernel resolves it (`/private/tmp/…`
+    // on macOS for a `/tmp/…` repo); compare canonical forms on both sides, so a
+    // symlinked repo root never hides its own sessions.
+    let working_dir =
+        std::fs::canonicalize(working_dir).unwrap_or_else(|_| working_dir.to_path_buf());
     let entries: Vec<(PathBuf, String)> = std::fs::read_dir(store_root)
         .ok()?
         .filter_map(|e| e.ok().map(|e| e.path()))
@@ -17862,7 +17898,7 @@ fn learn_vibe_session(
         .collect();
     vibe_session::learn_session(
         entries.iter().map(|(p, t)| (p.as_path(), t.as_str())),
-        working_dir,
+        &working_dir,
         spawn,
     )
 }

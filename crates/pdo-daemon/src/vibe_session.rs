@@ -166,8 +166,21 @@ pub(crate) fn learn_session<'a>(
     metas
         .into_iter()
         .filter_map(|(dir, text)| session_meta(text).map(|m| (dir.to_path_buf(), m)))
-        .filter(|(_, m)| m.working_directory == working_dir && m.start_time >= spawn)
+        .filter(|(_, m)| same_dir(&m.working_directory, working_dir) && m.start_time >= spawn)
         .min_by_key(|(_, m)| m.start_time)
+}
+
+/// Path equality tolerant to symlinked roots: canonical forms when both resolve
+/// (`/tmp` vs `/private/tmp` on macOS), literal equality otherwise (pure inputs in
+/// tests never touch the disk).
+fn same_dir(a: &Path, b: &Path) -> bool {
+    if a == b {
+        return true;
+    }
+    match (std::fs::canonicalize(a), std::fs::canonicalize(b)) {
+        (Ok(x), Ok(y)) => x == y,
+        _ => false,
+    }
 }
 
 /// Whether a session directory is **resumable** by vibe: both files present and valid
