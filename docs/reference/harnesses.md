@@ -38,6 +38,11 @@ Custom descriptors in `~/.pdo/harnesses/descriptors.yaml` can launch, attach, re
 | An installed version | Compare your installed harness with the last validated version in the support table |
 | A model catalogue for `pi` | Keep pi's model catalogue reachable from its home (`~/.pi/agent`): pi prices each message from it, and a message it cannot price makes the node's cost read "—" rather than `$0` |
 | `pi` in the sandbox image | PDO does not provide the sandbox image. For a sandboxed `pi` node your image must contain the `pi` binary: PDO checks it with a `which` at spawn, and a node whose binary is missing goes `Interrupted` with that reason (ADR-0063) |
+| `vibe`'s key | Mistral Vibe reads its API key from `~/.vibe/.env` (`vibe --setup`) or the provider's env var; PDO never sets it. In a sandbox the `.env` travels with the staged `.vibe` home, like pi's `auth.json` (ADR-0063) |
+| `vibe`'s model catalogue | What the picker offers for `vibe` is the `[[models]]` of its `~/.vibe/config.toml` (`$VIBE_HOME` honoured), re-read when the binary's version changes or the daemon restarts (ADR-0056). A `vibe` that was never launched has no file: the picker falls back to free text |
+| `vibe` and an unknown model | Measured on 2.25.8: a model absent from its catalogue does **not** fail the node — `vibe` silently runs the **first model of its configuration file** (the most expensive one on a default install) and exits 0. PDO does not guard (ADR-0053 §4); it shows the **observed** model beside the requested one in Stats › Cost › By model (ADR-0065) |
+| `vibe`'s session store | PDO learns a `vibe` node's session by working directory and spawn time (ADR-0080) under `session_logging.save_dir` of `config.toml` (default `~/.vibe/logs/session`). The descriptor pins `--legacy-harness`: the "Unified Harness" store (`logs/session/unified/`) is not read. An absolute `save_dir` outside the staged `.vibe` home is not harvested back from a sandbox |
+| `vibe` in the sandbox image | Same rule as `pi`: your image must contain the `vibe` binary (`uv tool install mistral-vibe`); PDO checks it with a `which` at spawn (ADR-0063) |
 
 Outside sandboxed runs, PDO does not stage any harness's home.
 
