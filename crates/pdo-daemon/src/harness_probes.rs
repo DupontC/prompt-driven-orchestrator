@@ -224,11 +224,19 @@ pub(crate) enum TurnEndSubstrate {
     /// session tail's `stopReason` ([`crate::pi_session::turn_state`]). Governed by
     /// the same `autocomplete_turn_end` setting as `claude`'s hook — no second switch.
     PiAgentSettled,
+    /// `vibe` (#963): a `post_agent` hook — "once per turn, after the agent finishes
+    /// responding" — armed by a fixed-path hooks file in the worktree, plus the
+    /// transcript tail as the sweep's fallback.
+    VibePostAgentHook,
 }
 
 impl TurnEndSubstrate {
     pub(crate) fn label(self) -> &'static str {
         match self {
+            TurnEndSubstrate::VibePostAgentHook => {
+                "an injected `post_agent` hook (`.vibe/hooks.toml` in the worktree), plus the \
+                 transcript tail as the sweep's fallback"
+            }
             TurnEndSubstrate::ClaudeTranscript => {
                 "an injected `Stop` hook, plus the transcript tail as the sweep's fallback"
             }
@@ -598,11 +606,11 @@ pub(crate) trait HarnessProbes: Sync {
     fn steering_source(&self) -> Option<SteeringSource> {
         None
     }
-    /// The file [`Self::steering_count`] reads, given the file
-    /// [`Self::resolve_transcript`] resolved. The same file for every harness whose
-    /// session is one file; `vibe` (#962) resolves by `meta.json` (cost, model,
-    /// context) and counts steering in its sibling `messages.jsonl`.
-    fn steering_transcript(&self, transcript: &Path) -> PathBuf {
+    /// The **messages** file — what steering and the sweep's turn-end / hard-error
+    /// tail read — given the file [`Self::resolve_transcript`] resolved. The same file
+    /// for every harness whose session is one file; `vibe` (#962, #963) resolves by
+    /// `meta.json` (cost, model, context) and reads its sibling `messages.jsonl` here.
+    fn messages_transcript(&self, transcript: &Path) -> PathBuf {
         transcript.to_path_buf()
     }
 
@@ -1147,6 +1155,24 @@ impl HarnessProbes for VibeProbes {
     fn steering_source(&self) -> Option<SteeringSource> {
         Some(SteeringSource::VibeSessionUserMessages)
     }
+    fn turn_end_substrate(&self) -> Option<TurnEndSubstrate> {
+        Some(TurnEndSubstrate::VibePostAgentHook)
+    }
+    /// [`VIBE_STAGING_SET`]: the `.vibe` home minus its logs and typed history, the
+    /// sessions harvested back, the hygiene env, no fixup (#963, ADR-0063).
+    fn staging_set(&self) -> Option<StagingSet> {
+        Some(VIBE_STAGING_SET)
+    }
+
+    /// The sweep's fallback: the last row of `messages.jsonl` is an assistant reply
+    /// with no pending tool call.
+    fn classify_turn_ended(&self, tail: &str) -> bool {
+        crate::vibe_session::turn_ended(tail)
+    }
+
+    fn classify_hard_error(&self, tail: &str) -> Option<String> {
+        crate::vibe_session::hard_error(tail)
+    }
 
     /// By the **learned** identity only (ADR-0080): without one there is nothing
     /// to resolve — never "the newest session of the cwd".
@@ -1159,7 +1185,7 @@ impl HarnessProbes for VibeProbes {
         crate::vibe_session::resolve_by_id(store_root, session_id?)
     }
 
-    fn steering_transcript(&self, transcript: &Path) -> PathBuf {
+    fn messages_transcript(&self, transcript: &Path) -> PathBuf {
         crate::vibe_session::messages_sibling(transcript)
     }
 
@@ -1187,6 +1213,36 @@ impl HarnessProbes for VibeProbes {
         false
     }
 }
+
+/// `vibe`'s staging set (#963, ADR-0063): the `.vibe` home — `.env` (the Mistral key:
+/// the auth is part of "behaving as on the host", like pi's `auth.json`), `config.toml`
+/// (catalogue, active model, `save_dir`), `trusted_folders.toml`, skills, agents, hooks,
+/// caches — **minus** `logs/` and the typed-input history, which are the user's. The
+/// sessions sink (`logs/session`) is harvested back so cost and transcript read at the
+/// same place with or without a sandbox (the worktree is mounted at its host path, the
+/// cwd learning of ADR-0080 holds). **No** autonomy fixup: `--trust --auto-approve` on
+/// the argv already disarm every dialog. Limit, declared: an absolute `save_dir` outside
+/// the staged home is not harvested.
+pub(crate) const VIBE_STAGING_SET: StagingSet = StagingSet {
+    label: "the `.vibe` home — key, settings, catalogue, trust, skills, agents and hooks \
+            copied (logs and typed history left out), sessions harvested back",
+    home_root: ".vibe",
+    entries: &[StagingEntry {
+        rel: ".vibe",
+        absent_note: Some(
+            "vibe is not set up on this host; the container starts with an empty vibe home",
+        ),
+    }],
+    excludes: &[".vibe/logs", ".vibe/vibehistory"],
+    env: &[
+        ("VIBE_ENABLE_UPDATE_CHECKS", "false"),
+        ("VIBE_ENABLE_AUTO_UPDATE", "false"),
+        ("VIBE_ENABLE_TELEMETRY", "false"),
+        ("VIBE_ASK_CONFIRMATION_ON_EXIT", "false"),
+    ],
+    transcripts: &[".vibe/logs/session"],
+    fixups: &[],
+};
 
 /// vibe's catalogue file (ADR-0056 §1 ter).
 pub(crate) const VIBE_CATALOGUE_CONFIG_FILE: CatalogueConfigFile = CatalogueConfigFile {
@@ -1259,8 +1315,8 @@ pub(crate) fn can_count_steering(harness: &str) -> bool {
 /// to its implementation (ADR-0051, #792). A harness with no
 /// [`HarnessProbes::steering_source`] answers `None`.
 /// The file `harness` counts steering in, given its resolved transcript (dispatch).
-pub(crate) fn steering_transcript(harness: &str, transcript: &Path) -> PathBuf {
-    resolved(harness).steering_transcript(transcript)
+pub(crate) fn messages_transcript(harness: &str, transcript: &Path) -> PathBuf {
+    resolved(harness).messages_transcript(transcript)
 }
 
 pub(crate) fn steering_count(harness: &str, text: &str) -> Option<u32> {
@@ -1355,22 +1411,53 @@ pub(crate) fn settings_hole_takes_claude_file(harness: &str) -> bool {
 pub(crate) struct TurnEndInjection {
     /// File-name suffix beside the prompt: `.settings.json` (claude), `.turn-end.ts`
     /// (pi). Distinct suffixes, so a resumed node on either harness rewrites its own
-    /// file idempotently and never another harness's.
+    /// file idempotently and never another harness's. Unused for a
+    /// [`TurnEndPlacement::WorktreeFile`].
     pub(crate) suffix: &'static str,
     /// The file body, byte for byte.
     pub(crate) body: &'static str,
+    /// Where the file goes (#963).
+    pub(crate) placement: TurnEndPlacement,
+}
+
+/// Where a harness takes its turn-end file (#963).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum TurnEndPlacement {
+    /// Beside the prompt under `.pdo/prompts/`, handed over through the `{settings}`
+    /// hole of the argv (`claude --settings`, `pi -e`).
+    BesidePrompt,
+    /// A **fixed path in the worktree** the harness reads on its own (`vibe`:
+    /// `.vibe/hooks.toml`, read when the cwd is trusted). No argv token; excluded from
+    /// the repository like a delivered skill (ADR-0062); never written over a user's
+    /// own file (recognised by [`crate::vibe_session::HOOKS_FILE_MARKER`]).
+    WorktreeFile {
+        rel: &'static str,
+        marker: &'static str,
+    },
 }
 
 /// `claude`'s injection: the `Stop`-hook settings JSON of #433, through `--settings`.
 const CLAUDE_TURN_END_INJECTION: TurnEndInjection = TurnEndInjection {
     suffix: ".settings.json",
     body: crate::tmux_session_manager::STOP_HOOK_SETTINGS_JSON,
+    placement: TurnEndPlacement::BesidePrompt,
 };
 
 /// `pi`'s injection: the `agent_settled` extension, through `-e`.
 const PI_TURN_END_INJECTION: TurnEndInjection = TurnEndInjection {
     suffix: crate::pi_session::TURN_END_EXTENSION_SUFFIX,
     body: crate::pi_session::TURN_END_EXTENSION_TS,
+    placement: TurnEndPlacement::BesidePrompt,
+};
+
+/// `vibe`'s injection (#963): the `post_agent` hooks file, at a fixed path in the worktree.
+const VIBE_TURN_END_INJECTION: TurnEndInjection = TurnEndInjection {
+    suffix: ".hooks.toml",
+    body: crate::vibe_session::TURN_END_HOOK_TOML,
+    placement: TurnEndPlacement::WorktreeFile {
+        rel: crate::vibe_session::HOOKS_FILE_REL,
+        marker: crate::vibe_session::HOOKS_FILE_MARKER,
+    },
 };
 
 /// What PDO writes into `harness`'s `{settings}` hole to arm turn-end
@@ -1394,6 +1481,7 @@ pub(crate) fn turn_end_injection(harness: &str) -> Option<TurnEndInjection> {
         Some(p) => match p.turn_end_substrate() {
             Some(TurnEndSubstrate::ClaudeTranscript) => Some(CLAUDE_TURN_END_INJECTION),
             Some(TurnEndSubstrate::PiAgentSettled) => Some(PI_TURN_END_INJECTION),
+            Some(TurnEndSubstrate::VibePostAgentHook) => Some(VIBE_TURN_END_INJECTION),
             Some(TurnEndSubstrate::CopilotEventJournal) | None => None,
         },
     }
@@ -1807,27 +1895,68 @@ mod tests {
             p.steering_source(),
             Some(SteeringSource::VibeSessionUserMessages)
         );
-        assert!(p.turn_end_substrate().is_none());
+        // #963: turn end by a `post_agent` hook (fixed-path file in the worktree) and
+        // a staging set; the usage-limit menu stays absent for good.
+        assert_eq!(
+            p.turn_end_substrate(),
+            Some(TurnEndSubstrate::VibePostAgentHook)
+        );
         assert!(p.usage_limit_anchor().is_none());
-        assert!(p.staging_set().is_none());
+        assert_eq!(p.staging_set(), Some(VIBE_STAGING_SET));
         assert_eq!(
             capabilities(VIBE),
             Capabilities {
                 cost: true,
                 transcript: true,
-                turn_end: false,
+                turn_end: true,
                 usage_limit: false,
-                staging: false,
+                staging: true,
                 context_usage: true,
             }
         );
         assert!(can_cost(VIBE));
         assert!(can_measure_context(VIBE));
         assert!(can_count_steering(VIBE));
-        assert!(turn_end_absence_note(VIBE).is_some());
-        assert!(staging_set_absence_note(VIBE).is_some());
-        assert_eq!(turn_end_injection(VIBE), None);
+        assert_eq!(turn_end_absence_note(VIBE), None);
+        assert_eq!(staging_set_absence_note(VIBE), None);
+        let injection = turn_end_injection(VIBE).expect("vibe has a turn-end injection");
+        assert_eq!(
+            injection.placement,
+            TurnEndPlacement::WorktreeFile {
+                rel: ".vibe/hooks.toml",
+                marker: crate::vibe_session::HOOKS_FILE_MARKER
+            }
+        );
+        assert!(injection.body.contains("post_agent"));
+        // Never the claude Stop-hook JSON, and the other two stay beside the prompt.
         assert!(!settings_hole_takes_claude_file(VIBE));
+        assert_eq!(
+            turn_end_injection(CLAUDE).unwrap().placement,
+            TurnEndPlacement::BesidePrompt
+        );
+        assert_eq!(
+            turn_end_injection(PI).unwrap().placement,
+            TurnEndPlacement::BesidePrompt
+        );
+        // The sweep's fallback dispatches to vibe's reader, on the messages file.
+        assert!(turn_ended(
+            VIBE,
+            include_str!("../tests/fixtures/vibe-2.25.8/messages_steering.jsonl")
+        ));
+        assert!(!turn_ended(
+            VIBE,
+            "{\"role\":\"user\",\"content\":\"x\",\"injected\":false}\n"
+        ));
+        assert!(!usage_limit_shown(VIBE, "wait for limit to reset"));
+        // Staging set shape (ADR-0063): the key travels, logs and history do not.
+        assert_eq!(VIBE_STAGING_SET.home_root, ".vibe");
+        assert!(VIBE_STAGING_SET.excludes.contains(&".vibe/logs"));
+        assert!(VIBE_STAGING_SET.excludes.contains(&".vibe/vibehistory"));
+        assert_eq!(VIBE_STAGING_SET.transcripts, &[".vibe/logs/session"]);
+        assert!(VIBE_STAGING_SET.fixups.is_empty());
+        assert!(staging_sets()
+            .iter()
+            .any(|(name, s)| name == VIBE && *s == VIBE_STAGING_SET));
         assert!(!exit_code_is_verdict(VIBE));
 
         // Reads go through vibe's own reader, never claude's or pi's parsers.
@@ -1847,11 +1976,11 @@ mod tests {
         );
         // Steering is counted in the sibling transcript, not in meta.json.
         assert_eq!(
-            steering_transcript(VIBE, Path::new("/s/session_x/meta.json")),
+            messages_transcript(VIBE, Path::new("/s/session_x/meta.json")),
             PathBuf::from("/s/session_x/messages.jsonl")
         );
         assert_eq!(
-            steering_transcript(PI, Path::new("/s/a.jsonl")),
+            messages_transcript(PI, Path::new("/s/a.jsonl")),
             PathBuf::from("/s/a.jsonl")
         );
         // Without a learned identity nothing resolves — never the newest session.
@@ -2171,17 +2300,19 @@ mod tests {
         assert!(set.excludes.is_empty());
     }
 
-    /// `claude` and `pi` declare a set; `copilot` and `opencode` are explicit
-    /// `None`s, so the generic consumers (mounts, merge-back, profile refusals) see
-    /// exactly two sets, in registry order.
+    /// `claude`, `pi` and `vibe` (#963) declare a set; `copilot` and `opencode` are
+    /// explicit `None`s, so the generic consumers (mounts, merge-back, profile
+    /// refusals) see exactly three sets, in registry order.
     #[test]
-    fn staging_sets_lists_claude_then_pi() {
+    fn staging_sets_lists_claude_then_pi_then_vibe() {
         let sets = staging_sets();
-        assert_eq!(sets.len(), 2, "{sets:?}");
+        assert_eq!(sets.len(), 3, "{sets:?}");
         assert_eq!(sets[0].0, CLAUDE);
         assert_eq!(sets[0].1, CLAUDE_STAGING_SET);
         assert_eq!(sets[1].0, PI);
         assert_eq!(sets[1].1, PI_STAGING_SET);
+        assert_eq!(sets[2].0, VIBE);
+        assert_eq!(sets[2].1, VIBE_STAGING_SET);
     }
 
     /// ADR-0063 / #708: pi's set is the whole `.pi/agent` minus `sessions/`, two env
